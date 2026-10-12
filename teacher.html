@@ -80,13 +80,18 @@
 <body>
 <header>
   <h1>🖥️ 画面モニター</h1>
-  <div>クラスコード <span id="code" class="code">------</span></div>
+  <div class="ctrl" style="font-size:14px;color:var(--text)">学級
+    <select id="classSel" style="font-size:15px;font-weight:700;max-width:160px"></select>
+    <span id="className" class="pill" style="display:none"></span>
+    <span id="code" class="code" title="クラスコード">------</span>
+    <button id="classBtn" class="owner-only" title="学級の追加・名前の変更・削除">⚙ 学級</button>
+  </div>
   <span id="role" class="pill">主担当</span>
   <label class="ctrl">表示名 <input id="tName" maxlength="20" style="width:110px" placeholder="例：田中"></label>
   <div class="ctrl">
     <button id="copyBtn" class="primary">生徒用URLをコピー</button>
     <button id="coBtn">👥 先生 <span id="coCount">1</span>/5</button>
-    <button id="newRoomBtn" class="owner-only">コードを変更</button>
+    <button id="newRoomBtn" class="owner-only" title="この学級のクラスコード・生徒用URL・先生用URLを新しくします（URLが漏れたとき用）">URLを作り直す</button>
     <button id="broadcastBtn">📢 全員に送信</button>
     <button id="logBtn" class="owner-only">📝 記録設定</button>
     <span id="logStatus" class="pill">記録：未設定</span>
@@ -144,6 +149,20 @@
   </div>
 </div>
 
+<dialog id="classDlg">
+  <h2>🏫 担当する学級</h2>
+  <p>学級ごとにクラスコード・生徒用URL・先生用URLが固定されます。生徒には毎回同じ生徒用URLを使ってもらえます。<br>
+     URLは<b>このパソコンのこのブラウザ</b>に保存された鍵から作られるため、いつも同じブラウザで開いてください。<br>
+     「ブックマーク用URL」を開くと、その学級の先生用ページが直接開きます。</p>
+  <div id="classList" class="colist"></div>
+  <label for="newClassName">学級を追加</label>
+  <div class="btns" style="justify-content:flex-start;margin-top:4px">
+    <input id="newClassName" maxlength="20" placeholder="例：1年2組" style="flex:1;width:auto">
+    <button id="addClassBtn" class="primary">追加</button>
+  </div>
+  <div class="btns"><button id="classClose" class="primary">閉じる</button></div>
+</dialog>
+
 <dialog id="coDlg">
   <h2>👥 先生（主担当＋最大4名）</h2>
   <p>「先生用URLをコピー」して一緒に見る先生に送ると、その先生はURLを開くだけで参加できます。<br>
@@ -196,20 +215,36 @@ const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + 
 const newToken = () => b64uRaw(crypto.getRandomValues(new Uint8Array(16)));
 function b64uRaw(bytes) { return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
 
-let room, ownerFp = '', coToken;
+// 学級ごとにクラスコード（room）と先生用URLの合言葉（token）を固定して保存する
+let room, ownerFp = '', coToken, cur, classes = [];
+const cleanClassName = n => String(n || '').trim().slice(0, 20);
+function saveClasses() {
+  store.set('screenmon-classes', JSON.stringify(classes));
+  store.set('screenmon-class-current', room);
+}
 if (IS_CO) {
   room = (params.get('co') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
   ownerFp = (params.get('k') || '').replace(/[^A-Za-z0-9_-]/g, '');
   coToken = (params.get('t') || '').replace(/[^A-Za-z0-9_-]/g, '');
+  cur = { name: cleanClassName(params.get('n')), room, token: coToken };
+  $('classSel').style.display = 'none';
+  if (cur.name) { $('className').textContent = cur.name; $('className').style.display = ''; }
   $('role').textContent = '副担当（接続中…）';
   // 主担当だけの操作は、同じ位置に灰色で表示する
   document.querySelectorAll('.owner-only').forEach(b => { b.disabled = true; b.title = '主担当の先生だけが操作できます'; });
   $('logStatus').textContent = '記録：主担当のパソコンで管理';
 } else {
-  room = store.get('screenmon-teacher-room') || newCode();
-  store.set('screenmon-teacher-room', room);
-  coToken = store.get('screenmon-co-token') || newToken();
-  store.set('screenmon-co-token', coToken);
+  try { classes = JSON.parse(store.get('screenmon-classes') || '[]'); } catch {}
+  classes = (Array.isArray(classes) ? classes : []).filter(c => c && /^[A-Z0-9]{4,12}$/.test(c.room) && c.token)
+    .map(c => ({ name: cleanClassName(c.name) || '学級', room: c.room, token: c.token }));
+  if (!classes.length) {
+    // 以前の1学級だけの設定（配布済みのURL）を「学級1」として引き継ぐ
+    classes.push({ name: '学級1', room: store.get('screenmon-teacher-room') || newCode(), token: store.get('screenmon-co-token') || newToken() });
+  }
+  const hashRoom = String((location.hash.match(/c=([A-Za-z0-9]{4,12})/) || [])[1] || '').toUpperCase();
+  cur = classes.find(c => c.room === hashRoom) || classes.find(c => c.room === store.get('screenmon-class-current')) || classes[0];
+  room = cur.room; coToken = cur.token;
+  saveClasses();
 }
 const ownerPeerId = () => PREFIX + alnum(ownerFp).slice(0, 10) + '-' + room + '-t';
 const coPeerId = fp => PREFIX + alnum(ownerFp).slice(0, 10) + '-' + room + '-c' + alnum(fp).slice(0, 8);
@@ -296,12 +331,18 @@ function signFor(nonce, otherPeerId) {
 // どの先生のページからでも同じURLを出せるよう、主担当の指紋（ownerFp）で作る
 function studentUrl() {
   const u = new URL('index.html', location.href);
-  u.search = '?room=' + room + '&k=' + ownerFp;
+  u.search = '?room=' + room + '&k=' + ownerFp + (cur.name ? '&n=' + encodeURIComponent(cur.name) : '');
   return u.toString();
 }
 function teacherUrl() {
   const u = new URL('teacher.html', location.href);
-  u.search = '?co=' + room + '&k=' + ownerFp + '&t=' + coToken;
+  u.search = '?co=' + room + '&k=' + ownerFp + '&t=' + coToken + (cur.name ? '&n=' + encodeURIComponent(cur.name) : '');
+  return u.toString();
+}
+// 主担当用：その学級の先生用ページを直接開くブックマーク用URL
+function bookmarkUrl(c) {
+  const u = new URL('teacher.html', location.href);
+  u.search = ''; u.hash = 'c=' + c.room;
   return u.toString();
 }
 
@@ -524,7 +565,13 @@ function sendTo(s, obj) { if (s.conn && s.conn.open) s.conn.send(obj); }
 // ---------- 複数の先生（主担当が中継役） ----------
 const coTeachers = new Map(); // 主担当側：指紋 -> 参加中の副担当
 let coBlocked = {};           // 主担当側：外した先生の指紋 -> 名前（先生用URLを作り直すまで有効）
-try { coBlocked = JSON.parse(store.get('screenmon-co-blocked') || '{}'); } catch {}
+const blockedKey = () => 'screenmon-co-blocked-' + room;
+function loadBlocked() {
+  // 以前の1学級だけの設定は、引き継いだ学級（元のクラスコード）にだけ当てはめる
+  const legacy = room === store.get('screenmon-teacher-room') ? store.get('screenmon-co-blocked') : null;
+  try { coBlocked = JSON.parse(store.get(blockedKey()) || legacy || '{}'); } catch { coBlocked = {}; }
+}
+loadBlocked();
 let roster = [];              // 参加中の先生の一覧（副担当側は主担当から受け取る）
 
 function teachersList() {
@@ -573,7 +620,7 @@ function kickCo(fp) {
   const co = coTeachers.get(fp);
   if (!co || !confirm(`${co.name} 先生をこのクラスから外しますか？\n（「先生用URLを作り直す」まで、この先生は参加できません）`)) return;
   coBlocked[fp] = co.name;
-  store.set('screenmon-co-blocked', JSON.stringify(coBlocked));
+  store.set(blockedKey(), JSON.stringify(coBlocked));
   coTeachers.delete(fp);
   co.conn.send({ type: 'co-denied', reason: '主担当の先生がこのクラスから外しました。' });
   setTimeout(() => co.conn.close(), 500);
@@ -583,10 +630,10 @@ function kickCo(fp) {
 // 先生用URLが漏れたときなど：合言葉を作り直し、参加中の副担当も全員外す
 function regenToken() {
   if (!confirm('先生用URLを作り直しますか？\n今の先生用URLは使えなくなり、参加中のほかの先生もいったん外れます。\n（新しい先生用URLを送り直してください）')) return;
-  coToken = newToken();
-  store.set('screenmon-co-token', coToken);
+  coToken = cur.token = newToken();
+  saveClasses();
   coBlocked = {};
-  store.set('screenmon-co-blocked', '{}');
+  store.set(blockedKey(), '{}');
   for (const co of coTeachers.values()) {
     co.conn.send({ type: 'co-denied', reason: '先生用URLが作り直されました。主担当の先生から新しい先生用URLをもらってください。' });
     setTimeout(() => co.conn.close(), 500);
@@ -784,7 +831,7 @@ function refreshAll() {
   $('cAlert').textContent = `停止 ${c.alert}`;
   $('cHand').textContent = `🙋 ${c.hand}`;
   $('cOff').textContent = `未共有・切断 ${c.off}`;
-  document.title = (c.hand ? `🙋${c.hand} ` : '') + (c.chat ? `💬${c.chat} ` : '') + '画面モニター（先生用）';
+  document.title = (c.hand ? `🙋${c.hand} ` : '') + (c.chat ? `💬${c.chat} ` : '') + (cur && cur.name ? cur.name + ' - ' : '') + '画面モニター（先生用）';
 
   // 並び順：CSSのorderで入れ替える（映像を再読み込みさせないため）
   const list = [...students.values()];
@@ -941,14 +988,114 @@ $('copyBtn').onclick = async () => {
   setTimeout(() => $('copyBtn').textContent = '生徒用URLをコピー', 2000);
 };
 $('newRoomBtn').onclick = () => {
-  if (!confirm('クラスコードを新しくします。今つながっている生徒は切断され、このコードのメッセージ履歴（このパソコン内の分）も消去されます。\n※スプレッドシートの記録は消えません。よろしいですか？')) return;
-  try { localStorage.removeItem(chatKey()); } catch {}
-  room = newCode(); store.set('screenmon-teacher-room', room);
+  if (!confirm(`「${cur.name}」のクラスコード・生徒用URL・先生用URLを新しくします（URLが漏れたとき用）。\n今つながっている生徒と先生は切断され、この学級のメッセージ履歴（このパソコン内の分）も消去されます。\n新しい生徒用URL・先生用URLを配り直す必要があります。\n※スプレッドシートの記録は消えません。よろしいですか？`)) return;
+  try { localStorage.removeItem(chatKey()); localStorage.removeItem(blockedKey()); } catch {}
+  cur.room = newCode(); cur.token = newToken();
+  switchToClass(cur, true);
+};
+
+// ---------- 学級の切り替え・管理 ----------
+function clearTiles() {
+  closeModal();
   for (const s of students.values()) s.el.remove();
   students.clear();
   $('empty').style.display = '';
+}
+
+function switchToClass(c, force) {
+  if (!force && c === cur) return;
+  cur = c; room = c.room; coToken = c.token;
+  saveClasses();
+  loadBlocked();
+  history.replaceState(null, '', '#c=' + room);
+  clearTiles();
+  renderClassSel();
   startPeer();
+  refreshAll();
+}
+
+function renderClassSel() {
+  const sel = $('classSel');
+  sel.innerHTML = '';
+  for (const c of classes) {
+    const o = document.createElement('option');
+    o.value = c.room; o.textContent = c.name;
+    sel.appendChild(o);
+  }
+  sel.value = room;
+  renderClassDlg();
+}
+
+$('classSel').addEventListener('change', () => {
+  const c = classes.find(x => x.room === $('classSel').value);
+  if (!c) return;
+  const live = [...students.values()].filter(s => s.connected).length;
+  if (live && !confirm(`「${c.name}」に切り替えます。今の学級につながっている生徒 ${live} 人は切断されます。よろしいですか？`)) {
+    $('classSel').value = room;
+    return;
+  }
+  switchToClass(c);
+});
+
+function renderClassDlg() {
+  const list = $('classList');
+  list.innerHTML = '';
+  for (const c of classes) {
+    const d = document.createElement('div'); d.className = 'corow';
+    d.innerHTML = '<span class="grow"></span><code></code><button>ブックマーク用URL</button><button>名前変更</button><button>削除</button>';
+    d.querySelector('.grow').textContent = c.name + (c === cur ? '（表示中）' : '');
+    d.querySelector('code').textContent = c.room;
+    const [bm, rn, del] = d.querySelectorAll('button');
+    bm.onclick = async () => {
+      const url = bookmarkUrl(c);
+      try { await navigator.clipboard.writeText(url); bm.textContent = 'コピーしました ✓'; }
+      catch { prompt('この学級の先生用ページ（ブックマーク用）', url); }
+      setTimeout(() => bm.textContent = 'ブックマーク用URL', 2000);
+    };
+    rn.onclick = () => {
+      const n = cleanClassName(prompt('学級の名前', c.name));
+      if (!n) return;
+      c.name = n; saveClasses(); renderClassSel(); refreshAll();
+    };
+    del.disabled = classes.length <= 1;
+    del.title = classes.length <= 1 ? '学級は1つ以上必要です' : '';
+    del.onclick = () => {
+      if (!confirm(`「${c.name}」を削除しますか？\nこの学級の生徒用URL・先生用URLは使えなくなり、メッセージ履歴（このパソコン内の分）も消去されます。`)) return;
+      try { localStorage.removeItem('screenmon-chat-' + c.room); localStorage.removeItem('screenmon-co-blocked-' + c.room); } catch {}
+      classes = classes.filter(x => x !== c);
+      if (c === cur) switchToClass(classes[0], true);
+      else { saveClasses(); renderClassSel(); }
+    };
+    list.appendChild(d);
+  }
+}
+
+// 開いたままのページで別の学級のブックマーク（#c=コード）を開いたときも切り替える
+window.addEventListener('hashchange', () => {
+  if (IS_CO) return;
+  const h = String((location.hash.match(/c=([A-Za-z0-9]{4,12})/) || [])[1] || '').toUpperCase();
+  const c = classes.find(x => x.room === h);
+  if (!c || c === cur) return;
+  const live = [...students.values()].filter(s => s.connected).length;
+  if (live && !confirm(`「${c.name}」に切り替えます。今の学級につながっている生徒 ${live} 人は切断されます。よろしいですか？`)) {
+    history.replaceState(null, '', '#c=' + room);
+    return;
+  }
+  switchToClass(c);
+});
+
+$('classBtn').onclick = () => { renderClassDlg(); $('classDlg').showModal(); };
+$('classClose').onclick = () => $('classDlg').close();
+$('addClassBtn').onclick = () => {
+  const n = cleanClassName($('newClassName').value);
+  if (!n) { $('newClassName').focus(); return; }
+  if (classes.length >= 30) { alert('学級は30まで登録できます'); return; }
+  classes.push({ name: n, room: newCode(), token: newToken() });
+  $('newClassName').value = '';
+  saveClasses();
+  renderClassSel();
 };
+$('newClassName').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) $('addClassBtn').click(); });
 $('cleanBtn').onclick = () => {
   for (const [sid, s] of students) {
     if (!s.connected && !s.sharing) { s.el.remove(); students.delete(sid); }
@@ -968,7 +1115,7 @@ function logRow(s, from, text) {
   if (!logCfg.url) return;
   logQueue.push({
     id: (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random()),
-    ts: Date.now(), room, from, text,
+    ts: Date.now(), room: (cur && cur.name ? cur.name + '／' : '') + room, from, text,
     name: s ? s.name : '全員', sid: s ? s.sid : '',
   });
   if (logQueue.length > 5000) logQueue = logQueue.slice(-5000);
@@ -1079,7 +1226,7 @@ window.addEventListener('beforeunload', e => { if (students.size) { e.preventDef
     $('empty').innerHTML = '主担当の先生の入室を待っています…<br>主担当の先生がページを開くと、生徒の画面がここに並びます。';
   }
   await initKey();
-  if (!IS_CO) ownerFp = keyFp;
+  if (!IS_CO) { ownerFp = keyFp; renderClassSel(); history.replaceState(null, '', '#c=' + room); }
   startPeer();
 })();
 </script>
