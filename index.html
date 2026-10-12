@@ -225,11 +225,14 @@ function startPeer() {
   setStatus('接続しています…', 'warn');
   peer = new Peer();
   peer.on('open', () => {
+    signalTries = 0;
     const owner = teachers.get(ownerId) || { id: ownerId, fp: keyFp, owner: true, name: '' };
     teachers.set(ownerId, owner);
-    for (const t of teachers.values()) connectTeacher(t);
+    // 仲介サーバーへの再接続でも open が来る。つながっている先生との接続は作り直さない
+    for (const t of teachers.values()) if (!(t.authed && t.conn && t.conn.open)) connectTeacher(t);
   });
-  peer.on('disconnected', () => { if (!peer.destroyed) peer.reconnect(); });
+  // 仲介サーバーとの通信が切れても、先生との映像（直接の接続）は続いている。サーバーへの接続だけをつなぎ直す
+  peer.on('disconnected', () => scheduleSignalReconnect());
   peer.on('error', err => {
     const msg = String(err.message || '');
     if (err.type === 'peer-unavailable') {
@@ -239,13 +242,28 @@ function startPeer() {
         if (t.owner) setStatus('主担当の先生の入室を待っています。先生が入ると自動で始まります…', 'warn');
         scheduleRetry(t, t.owner ? 3000 : 6000);
       }
-    } else if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(err.type)) {
-      setStatus('ネットワークに接続できません。自動で接続し直します…', 'bad');
-      for (const t of teachers.values()) scheduleRetry(t, 5000);
+    } else if (['network', 'server-error', 'socket-error', 'socket-closed', 'disconnected'].includes(err.type)) {
+      // つながっている先生との接続はそのまま。つながっていない先生だけ後で試す
+      const anyLive = [...teachers.values()].some(t => t.authed && t.conn && t.conn.open);
+      if (!anyLive) setStatus('ネットワークに接続できません。自動で接続し直します…', 'bad');
+      for (const t of teachers.values()) if (!(t.authed && t.conn && t.conn.open)) scheduleRetry(t, 5000);
+      scheduleSignalReconnect();
     } else {
       console.warn(err);
     }
   });
+}
+
+// 仲介サーバーへの再接続（1秒→2秒→4秒…最大30秒の間隔）
+let signalRetry = null, signalTries = 0;
+function scheduleSignalReconnect() {
+  if (!peer || peer.destroyed) return;
+  clearTimeout(signalRetry);
+  signalRetry = setTimeout(() => {
+    signalTries++;
+    if (peer.disconnected && !peer.destroyed) peer.reconnect();
+    signalRetry = setTimeout(() => { if (peer.disconnected && !peer.destroyed) scheduleSignalReconnect(); }, 10000);
+  }, Math.min(30000, 1000 * 2 ** signalTries));
 }
 
 function scheduleRetry(t, ms) {
