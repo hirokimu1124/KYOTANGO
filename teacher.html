@@ -105,6 +105,8 @@
     <label>並び順 <select id="sort"><option value="attention">要対応順</option><option value="name">名前順</option></select></label>
     <label>大きさ <input type="range" id="size" min="150" max="480" value="220"></label>
     <label><input type="checkbox" id="sound" checked> 🙋で音</label>
+    <label title="一覧の映像を軽くして通信量をおよそ半分にします（拡大した生徒は高画質のまま）"><input type="checkbox" id="saver"> 省データ</label>
+    <span id="netStat" class="pill" title="生徒からの映像の受信量（2秒ごとに更新）">📶 受信 0.0Mbps</span>
     <button id="cleanBtn">切断者を消す</button>
   </div>
 </header>
@@ -504,8 +506,9 @@ function attachCall(s, call) {
   call.answer();
   call.on('stream', st => {
     s.video.srcObject = st;
-    s.sharing = true; s.lastActive = Date.now(); s.prev = null;
-    if (focused === s) { $('bigVideo').srcObject = st; sendTo(s, { type: 'quality', mode: 'high' }); }
+    s.sharing = true; s.lastActive = Date.now(); s.prev = null; s.netPrev = null;
+    if (focused === s) $('bigVideo').srcObject = st;
+    sendTo(s, { type: 'quality', mode: focused === s ? 'high' : baseMode() });
     refresh(s);
   });
   call.on('close', () => { if (s.call === call) { s.sharing = false; refresh(s); } });
@@ -794,6 +797,53 @@ function refreshAll() {
   if (focused) updateModal();
 }
 
+// ---------- 省データ設定 ----------
+// 一覧の画質：通常 0.25Mbps・毎秒4コマ ／ 省データ 0.15Mbps・毎秒2コマ（拡大中の生徒は高画質）
+const baseMode = () => $('saver').checked ? 'saver' : 'low';
+$('saver').checked = store.get('screenmon-saver') === '1';
+$('saver').addEventListener('change', () => {
+  store.set('screenmon-saver', $('saver').checked ? '1' : '0');
+  for (const s of students.values()) if (s !== focused) sendTo(s, { type: 'quality', mode: baseMode() });
+});
+
+// ---------- 通信量の表示 ----------
+// 各生徒との接続の統計（getStats）から、2秒ごとに受信量を計算する
+let netTotal = 0;
+async function pollNet() {
+  let rate = 0, relay = 0, live = 0;
+  for (const s of students.values()) {
+    const pc = s.sharing && s.call && s.call.peerConnection;
+    if (!pc) { s.kbps = 0; s.relay = false; continue; }
+    try {
+      const stats = await pc.getStats();
+      const byId = {};
+      let bytes = 0, pairId = null;
+      stats.forEach(r => {
+        byId[r.id] = r;
+        if (r.type === 'inbound-rtp' && r.kind === 'video') bytes += r.bytesReceived || 0;
+        if (r.type === 'transport' && r.selectedCandidatePairId) pairId = r.selectedCandidatePairId;
+      });
+      if (!pairId) stats.forEach(r => { if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') pairId = r.id; });
+      const pair = pairId && byId[pairId];
+      const local = pair && byId[pair.localCandidateId];
+      s.relay = !!(local && local.candidateType === 'relay');
+      const now = performance.now();
+      if (s.netPrev && s.netPrev.pc === pc && bytes >= s.netPrev.bytes) {
+        const d = bytes - s.netPrev.bytes;
+        s.kbps = d * 8 / (now - s.netPrev.t); // bit/ms = kbps
+        netTotal += d;
+      }
+      s.netPrev = { pc, bytes, t: now };
+      rate += s.kbps || 0; live++;
+      if (s.relay) relay++;
+    } catch { /* 接続の切り替え中 */ }
+  }
+  $('netStat').textContent = `📶 受信 ${(rate / 1000).toFixed(1)}Mbps・累計 ${Math.round(netTotal / 1e6)}MB` +
+    (live ? `（1人平均 ${Math.round(rate / live)}kbps）` : '') + (relay ? `・中継経由 ${relay}人` : '');
+  $('netStat').className = 'pill' + (relay ? ' warn' : '');
+}
+setInterval(pollNet, 2000);
+
 // ---------- 画面の変化検出 ----------
 const cv = document.createElement('canvas');
 cv.width = 64; cv.height = 36;
@@ -822,7 +872,7 @@ setInterval(checkActivity, 1000);
 
 // ---------- 拡大表示 ----------
 function openModal(s) {
-  if (focused && focused !== s) sendTo(focused, { type: 'quality', mode: 'low' });
+  if (focused && focused !== s) sendTo(focused, { type: 'quality', mode: baseMode() });
   focused = s;
   $('bigVideo').srcObject = s.video.srcObject;
   sendTo(s, { type: 'quality', mode: 'high' });
@@ -835,7 +885,7 @@ function openModal(s) {
   $('mText').focus();
 }
 function closeModal() {
-  if (focused) sendTo(focused, { type: 'quality', mode: 'low' });
+  if (focused) sendTo(focused, { type: 'quality', mode: baseMode() });
   focused = null;
   $('bigVideo').srcObject = null;
   $('modal').classList.remove('show');
@@ -843,7 +893,7 @@ function closeModal() {
 function updateModal() {
   if (!focused) return;
   $('mName').textContent = focused.name + (focused.hand ? '　🙋 困っています' : '');
-  $('mStatus').textContent = focused.state ? focused.state.label : '';
+  $('mStatus').textContent = (focused.state ? focused.state.label : '') + (focused.kbps ? `　📶 ${Math.round(focused.kbps)}kbps` : '') + (focused.relay ? '（中継経由）' : '');
   $('mHandOff').style.display = focused.hand ? '' : 'none';
 }
 function sendMsg(text) {

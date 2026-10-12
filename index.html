@@ -74,6 +74,7 @@
       <button id="stopBtn" class="secondary">共有を停止</button>
       <button id="resumeBtn" class="primary hidden" style="margin-top:0">共有を再開</button>
     </div>
+    <p id="net" class="note"></p>
     <p class="note">このタブは閉じずに、課題のタブやアプリに切り替えて作業してください。</p>
   </section>
 
@@ -390,8 +391,9 @@ function onTeacherData(t, d) {
   }
 }
 
+// 画質：high＝拡大表示中、low＝一覧（通常）、saver＝一覧（省データ）
 async function applyQuality(t, mode) {
-  t.quality = mode === 'high' ? 'high' : 'low';
+  t.quality = ['high', 'saver'].includes(mode) ? mode : 'low';
   const pc = t.call && t.call.peerConnection;
   if (!pc || !stream) return;
   const track = stream.getVideoTracks()[0];
@@ -404,6 +406,10 @@ async function applyQuality(t, mode) {
       p.encodings[0].maxBitrate = 2_000_000;
       p.encodings[0].maxFramerate = 10;
       p.encodings[0].scaleResolutionDownBy = Math.max(1, w / 1920);
+    } else if (t.quality === 'saver') {
+      p.encodings[0].maxBitrate = 150_000;
+      p.encodings[0].maxFramerate = 2;
+      p.encodings[0].scaleResolutionDownBy = Math.max(1, w / 640);
     } else {
       p.encodings[0].maxBitrate = 250_000;
       p.encodings[0].maxFramerate = 4;
@@ -413,6 +419,34 @@ async function applyQuality(t, mode) {
     try { await sender.setParameters(p); } catch (e) { console.warn('setParameters', e); }
   }
 }
+
+// ---------- 通信量の表示 ----------
+// 先生ごとの接続の統計（getStats）から、2秒ごとに送信量を計算する
+let upTotal = 0;
+async function pollNet() {
+  let rate = 0, n = 0;
+  for (const t of teachers.values()) {
+    const pc = t.call && t.call.peerConnection;
+    if (!pc) continue;
+    try {
+      const stats = await pc.getStats();
+      let bytes = 0;
+      stats.forEach(r => { if (r.type === 'outbound-rtp' && r.kind === 'video') bytes += r.bytesSent || 0; });
+      const now = performance.now();
+      if (t.netPrev && t.netPrev.pc === pc && bytes >= t.netPrev.bytes) {
+        const d = bytes - t.netPrev.bytes;
+        rate += d * 8 / (now - t.netPrev.t); // bit/ms = kbps
+        upTotal += d;
+      }
+      t.netPrev = { pc, bytes, t: now };
+      n++;
+    } catch { /* 接続の切り替え中 */ }
+  }
+  $('net').textContent = sharing && n
+    ? `📶 送信 ${(rate / 1000).toFixed(2)}Mbps（先生${n}人分）・累計 ${Math.round(upTotal / 1e6)}MB`
+    : (upTotal ? `📶 累計送信 ${Math.round(upTotal / 1e6)}MB` : '');
+}
+setInterval(pollNet, 2000);
 
 // ---------- メッセージ ----------
 let chat = [];
