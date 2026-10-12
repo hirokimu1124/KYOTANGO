@@ -110,6 +110,7 @@
     <label>並び順 <select id="sort"><option value="attention">要対応順</option><option value="name">名前順</option></select></label>
     <label>大きさ <input type="range" id="size" min="150" max="480" value="220"></label>
     <label><input type="checkbox" id="sound" checked> 🙋で音</label>
+    <label title="このページを見ていないとき（Zoomなど）に、生徒からのメッセージと🙋をパソコンの通知でお知らせします"><input type="checkbox" id="notify"> 🔔 通知</label>
     <label title="一覧の映像を軽くして通信量をおよそ半分にします（拡大した生徒は高画質のまま）"><input type="checkbox" id="saver"> 省データ</label>
     <span id="netStat" class="pill" title="生徒からの映像の受信量（2秒ごとに更新）">📶 受信 0.0Mbps</span>
     <button id="cleanBtn">切断者を消す</button>
@@ -523,6 +524,7 @@ function onStudentData(s, d) {
     s.hand = !!d.on;
     if (s.hand && !IS_CO) logRow(s, '生徒', '（🙋 困っていますボタン）');
     if (s.hand && $('sound').checked) beep();
+    if (s.hand) notifyTeacher(s, '🙋 困っています');
   }
   if (d.type === 'stopped') { s.sharing = false; }
   if (d.type === 'chat') {
@@ -535,6 +537,7 @@ function onStudentData(s, d) {
     if (focused === s) renderLog(); else s.unread++;
     saveChats();
     if ($('sound').checked) beep(660);
+    notifyTeacher(s, '💬 ' + text);
   }
   refreshAll();
 }
@@ -892,6 +895,29 @@ function refreshAll() {
 // ---------- 省データ設定 ----------
 // 一覧の画質：通常 0.25Mbps・毎秒4コマ ／ 省データ 0.15Mbps・毎秒2コマ（拡大中の生徒は高画質）
 const baseMode = () => $('saver').checked ? 'saver' : 'low';
+
+// ---------- パソコンの通知（このページを見ていないとき） ----------
+$('notify').checked = store.get('screenmon-notify') === '1' && 'Notification' in window && Notification.permission === 'granted';
+$('notify').addEventListener('change', async () => {
+  if ($('notify').checked) {
+    if (!('Notification' in window)) { alert('このブラウザは通知に対応していません'); $('notify').checked = false; return; }
+    const perm = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission;
+    if (perm !== 'granted') {
+      alert('通知が許可されていません。アドレスバー左のアイコン →「通知」を「許可」にしてから、もう一度チェックしてください。');
+      $('notify').checked = false;
+    }
+  }
+  store.set('screenmon-notify', $('notify').checked ? '1' : '0');
+});
+
+function notifyTeacher(s, body) {
+  if (!$('notify').checked || !('Notification' in window) || Notification.permission !== 'granted') return;
+  if (document.visibilityState === 'visible' && document.hasFocus()) return; // 見ているときは画面の表示で十分
+  try {
+    const n = new Notification(`${s.name}${cur && cur.name ? '（' + cur.name + '）' : ''}`, { body: String(body).slice(0, 120), tag: 'screenmon-' + s.sid, renotify: true });
+    n.onclick = () => { window.focus(); n.close(); openModal(s); };
+  } catch {}
+}
 $('saver').checked = store.get('screenmon-saver') === '1';
 $('saver').addEventListener('change', () => {
   store.set('screenmon-saver', $('saver').checked ? '1' : '0');

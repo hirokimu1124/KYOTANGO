@@ -41,6 +41,13 @@
   .chatSend { display:flex; gap:8px; margin-top:10px; }
   .chatSend input { flex:1; }
   .chatSend button { background:var(--accent); color:#fff; white-space:nowrap; }
+  .pin { background:#fef3c7; color:#92400e; width:100%; margin-top:12px; font-size:17px; }
+  .pin.on { background:#d1fae5; color:#065f46; }
+  #popup { position:fixed; inset:0; background:rgba(15,23,42,.55); display:none; align-items:center; justify-content:center; padding:16px; z-index:50; }
+  #popup.show { display:flex; }
+  #popup .box { background:#fff; border-radius:16px; padding:22px; max-width:520px; width:100%; box-shadow:0 20px 50px rgba(0,0,0,.35); border-top:8px solid var(--warn); }
+  #popup .from { color:var(--muted); font-size:14px; margin-bottom:6px; }
+  #popup .text { font-size:22px; line-height:1.6; white-space:pre-wrap; word-break:break-word; margin-bottom:16px; }
 </style>
 </head>
 <body>
@@ -74,6 +81,8 @@
       <button id="stopBtn" class="secondary">共有を停止</button>
       <button id="resumeBtn" class="primary hidden" style="margin-top:0">共有を再開</button>
     </div>
+    <button id="pinBtn" class="pin">📌 先生からのメッセージを常に手前に表示する（おすすめ）</button>
+    <p class="note" id="pinNote">押すと小さな窓が開き、課題のタブやほかのアプリの上にずっと表示されます。先生からのメッセージはそこに届きます。</p>
     <p id="net" class="note"></p>
     <p class="note">このタブは閉じずに、課題のタブやアプリに切り替えて作業してください。</p>
   </section>
@@ -88,6 +97,14 @@
     <p class="note">メッセージの履歴はこのタブを閉じると消えます。</p>
   </section>
 </main>
+
+<div id="popup" role="dialog" aria-modal="true" aria-labelledby="popupText">
+  <div class="box">
+    <div class="from" id="popupFrom">先生からのメッセージ</div>
+    <div class="text" id="popupText"></div>
+    <button id="popupOk" class="primary" style="margin-top:0">わかりました</button>
+  </div>
+</div>
 
 <script>
 const PREFIX = 'hk-screenmon-v2-';
@@ -135,6 +152,7 @@ let name = '', hand = false, sharing = false;
 function setStatus(text, cls) {
   $('statusText').textContent = text;
   $('dot').className = 'dot ' + (cls || '');
+  renderPip();
 }
 
 function updateStatus() {
@@ -214,6 +232,7 @@ $('handBtn').onclick = () => {
   $('handBtn').classList.toggle('on', hand);
   $('handBtn').textContent = hand ? '🙋 先生に知らせています（もう一度押すと取り消し）' : '🙋 困っています（先生に知らせる）';
   send({ type: 'hand', on: hand });
+  renderPip();
 };
 
 // 本人確認できた先生全員に送る
@@ -407,7 +426,7 @@ function onTeacherData(t, d) {
     const by = String(d.by || t.name || '').slice(0, 20);
     if (by && !t.name && t.owner) t.name = by;
     addChat('t', text, d.all, by);
-    showMessage(text);
+    showMessage(text, by, d.all);
   }
 }
 
@@ -502,27 +521,44 @@ function renderChat() {
 
 let lastChatAt = 0;
 function sendChat() {
-  const text = $('chatText').value.trim().slice(0, 300);
-  if (!text) return;
+  if (sendChatText($('chatText').value)) $('chatText').value = '';
+}
+function sendChatText(raw) {
+  const text = String(raw || '').trim().slice(0, 300);
+  if (!text) return false;
   if (![...teachers.values()].some(t => t.authed && t.conn && t.conn.open)) {
     alert('先生とつながっていないため送れません。少し待ってからもう一度送ってください。');
-    return;
+    return false;
   }
-  if (Date.now() - lastChatAt < 2000) { alert('続けて送るときは、少し間をあけてください。'); return; }
+  if (Date.now() - lastChatAt < 2000) { alert('続けて送るときは、少し間をあけてください。'); return false; }
   lastChatAt = Date.now();
   // 同じ id で全先生に送る（先生側で重複を防ぐ）
   const id = (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random());
   send({ type: 'chat', text, id });
   addChat('s', text);
-  $('chatText').value = '';
+  renderPip();
+  return true;
 }
 $('chatBtn').onclick = sendChat;
 $('chatText').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) sendChat(); });
 
-function showMessage(text) {
-  $('chat').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  if ('Notification' in window && Notification.permission === 'granted') {
-    try { new Notification('先生からのメッセージ', { body: text, requireInteraction: true }); } catch {}
+function showMessage(text, by, all) {
+  const from = `先生${by ? '（' + by + '）' : ''}からのメッセージ${all ? '（全員へ）' : ''}`;
+  const time = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+  lastMsg = { from, text, time };
+  // ① このページ上：「わかりました」を押すまで消えないポップアップ
+  $('popupFrom').textContent = `${from}　${time}`;
+  $('popupText').textContent = text;
+  $('popup').classList.add('show');
+  $('popupOk').focus();
+  // ② 常に手前の小窓：光らせて本文を表示
+  renderPip(true);
+  // ③ 小窓を開いていないときは、Chromebookの通知も出す
+  if (!pipWin && 'Notification' in window && Notification.permission === 'granted') {
+    try {
+      const n = new Notification(from, { body: text, requireInteraction: true, tag: 'screenmon-msg' });
+      n.onclick = () => { window.focus(); n.close(); };
+    } catch {}
   }
   let n = 0;
   const orig = '画面共有（生徒用）';
@@ -530,6 +566,89 @@ function showMessage(text) {
     document.title = (n++ % 2) ? orig : '📩 先生からのメッセージ';
     if (n > 20 || (document.visibilityState === 'visible' && n > 4)) { clearInterval(t); document.title = orig; }
   }, 800);
+}
+
+$('popupOk').onclick = () => $('popup').classList.remove('show');
+
+// ---------- 常に手前に出る小窓（Document Picture-in-Picture） ----------
+// ほかのタブやアプリの上にずっと表示される。生徒がボタンを押したときだけ開ける（ブラウザの制約）
+let pipWin = null, lastMsg = null;
+const PIP_CSS = `
+  body { margin:0; font-family: system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif; background:#f5f7fb; color:#1f2937; }
+  .wrap { padding:10px; display:flex; flex-direction:column; gap:8px; height:100vh; box-sizing:border-box; }
+  .st { font-size:13px; font-weight:700; display:flex; gap:6px; align-items:center; }
+  .dot { width:10px; height:10px; border-radius:50%; background:#6b7280; flex:none; }
+  .dot.ok { background:#16a34a; } .dot.warn { background:#d97706; } .dot.bad { background:#dc2626; }
+  .msg { flex:1; overflow:auto; background:#fff; border-radius:10px; padding:10px; border:2px solid #e5e7eb; }
+  .msg .from { font-size:12px; color:#6b7280; margin-bottom:4px; }
+  .msg .text { font-size:17px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+  .msg.new { border-color:#f59e0b; background:#fef3c7; animation: flash 1s 4; }
+  @keyframes flash { 50% { background:#fde68a; } }
+  .row { display:flex; gap:6px; }
+  input { flex:1; min-width:0; font-size:14px; padding:6px 8px; border:1px solid #d1d5db; border-radius:8px; }
+  button { font-size:14px; padding:6px 10px; border:0; border-radius:8px; cursor:pointer; font-weight:700; background:#2563eb; color:#fff; }
+  button.hand { background:#ede9fe; color:#7c3aed; } button.hand.on { background:#7c3aed; color:#fff; }
+  button.ok { background:#e5e7eb; color:#1f2937; }
+`;
+
+async function openPip() {
+  if (!('documentPictureInPicture' in window)) {
+    alert('このブラウザは「常に手前に表示」に対応していません。Chrome を最新にしてください。\nかわりに、メッセージが届くとこのページと通知でお知らせします。');
+    return;
+  }
+  if (pipWin) { pipWin.focus(); return; }
+  try {
+    pipWin = await documentPictureInPicture.requestWindow({ width: 360, height: 260 });
+  } catch (e) {
+    alert('小窓を開けませんでした。もう一度ボタンを押してください。');
+    return;
+  }
+  const d = pipWin.document;
+  d.title = '先生からのメッセージ';
+  const st = d.createElement('style'); st.textContent = PIP_CSS; d.head.appendChild(st);
+  d.body.innerHTML = `<div class="wrap">
+    <div class="st"><span class="dot" id="pDot"></span><span id="pStatus"></span></div>
+    <div class="msg" id="pMsg"><div class="from" id="pFrom"></div><div class="text" id="pText"></div></div>
+    <div class="row"><button class="ok" id="pOk">わかりました</button><button class="hand" id="pHand"></button></div>
+    <div class="row"><input id="pInput" maxlength="300" placeholder="先生に返信（Enterで送信）"><button id="pSend">送信</button></div>
+  </div>`;
+  const q = id => d.getElementById(id);
+  q('pHand').onclick = () => $('handBtn').click();
+  q('pOk').onclick = () => { q('pMsg').classList.remove('new'); $('popup').classList.remove('show'); };
+  const sendFromPip = () => { if (sendChatText(q('pInput').value)) q('pInput').value = ''; };
+  q('pSend').onclick = sendFromPip;
+  q('pInput').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) sendFromPip(); });
+  pipWin.addEventListener('pagehide', () => { pipWin = null; updatePinBtn(); });
+  updatePinBtn();
+  renderPip();
+}
+
+function renderPip(isNew) {
+  if (!pipWin) return;
+  const d = pipWin.document, q = id => d.getElementById(id);
+  if (!q('pStatus')) return;
+  q('pStatus').textContent = $('statusText').textContent;
+  q('pDot').className = 'dot ' + ($('dot').className.replace('dot', '').trim());
+  q('pHand').textContent = hand ? '🙋 知らせています（取り消す）' : '🙋 困っています';
+  q('pHand').classList.toggle('on', hand);
+  if (lastMsg) {
+    q('pFrom').textContent = `${lastMsg.from}　${lastMsg.time}`;
+    q('pText').textContent = lastMsg.text;
+  } else {
+    q('pFrom').textContent = '';
+    q('pText').textContent = '先生からのメッセージはここに表示されます。';
+  }
+  if (isNew) { q('pMsg').classList.remove('new'); void q('pMsg').offsetWidth; q('pMsg').classList.add('new'); }
+}
+
+function updatePinBtn() {
+  $('pinBtn').classList.toggle('on', !!pipWin);
+  $('pinBtn').textContent = pipWin ? '📌 小窓を表示中（閉じると通常の通知に戻ります）' : '📌 先生からのメッセージを常に手前に表示する（おすすめ）';
+}
+$('pinBtn').onclick = openPip;
+if (!('documentPictureInPicture' in window)) {
+  $('pinBtn').style.display = 'none';
+  $('pinNote').textContent = 'メッセージが届くと、このページと通知でお知らせします。';
 }
 
 // テスト用：?demo=1 で画面の代わりに動くダミー映像を送る（1分動いて1分止まるを繰り返す）
