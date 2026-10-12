@@ -1,0 +1,1037 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>画面モニター（先生用）</title>
+<meta name="referrer" content="no-referrer">
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js" integrity="sha384-nlUQ8ZqCbvStErob+biJNzSgltf6urV3VGqhfIfzhmg9RXmpeRm76ELw0pYnKlTR" crossorigin="anonymous"></script>
+<style>
+  :root { --bg:#0f172a; --panel:#1e293b; --text:#e2e8f0; --muted:#94a3b8; --accent:#3b82f6; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --hand:#a855f7; --tile:220px; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family: system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif; background:var(--bg); color:var(--text); }
+  header { position:sticky; top:0; z-index:5; background:var(--panel); padding:10px 16px; display:flex; flex-wrap:wrap; gap:10px 18px; align-items:center; border-bottom:1px solid #334155; }
+  header h1 { font-size:18px; margin:0; }
+  .code { font-family: ui-monospace, Consolas, monospace; font-size:22px; font-weight:800; letter-spacing:2px; background:#0b1220; padding:2px 10px; border-radius:6px; }
+  .counts { display:flex; gap:8px; flex-wrap:wrap; }
+  .pill { padding:3px 10px; border-radius:999px; font-size:14px; font-weight:700; background:#334155; }
+  .pill.ok { background:#14532d; } .pill.warn { background:#78350f; } .pill.bad { background:#7f1d1d; } .pill.hand { background:#581c87; }
+  .ctrl { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:13px; color:var(--muted); }
+  .ctrl input[type=number] { width:52px; }
+  input, select { background:#0b1220; color:var(--text); border:1px solid #334155; border-radius:6px; padding:4px 6px; font-size:13px; }
+  button { background:#334155; color:var(--text); border:0; border-radius:6px; padding:6px 10px; font-size:13px; cursor:pointer; font-weight:600; }
+  button:hover { background:#475569; }
+  button.primary { background:var(--accent); }
+  #banner { padding:8px 16px; background:#7f1d1d; display:none; }
+  #grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(var(--tile), 1fr)); gap:10px; padding:12px 16px 40px; }
+  .empty { color:var(--muted); padding:40px 16px; text-align:center; line-height:1.9; grid-column:1/-1; }
+  .tile { background:var(--panel); border-radius:10px; overflow:hidden; border:3px solid #334155; cursor:pointer; position:relative; transition:border-color .2s; }
+  .tile:hover { filter:brightness(1.1); }
+  .tile video { width:100%; aspect-ratio:16/9; background:#000; display:block; object-fit:contain; }
+  .tile .info { padding:5px 8px; display:flex; justify-content:space-between; gap:6px; align-items:center; font-size:13px; }
+  .tile .nm { font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tile .st { white-space:nowrap; color:var(--muted); font-size:12px; }
+  .tile.active { border-color:#166534; }
+  .tile.warn { border-color:var(--warn); } .tile.warn .st { color:var(--warn); font-weight:700; }
+  .tile.alert { border-color:var(--bad); } .tile.alert .st { color:var(--bad); font-weight:700; }
+  .tile.off { border-color:#475569; opacity:.6; } .tile.off video { filter:grayscale(1); }
+  .tile.hand { border-color:var(--hand); box-shadow:0 0 0 3px rgba(168,85,247,.35); }
+  .tile .handmark { position:absolute; top:6px; right:6px; background:var(--hand); color:#fff; font-weight:800; padding:3px 8px; border-radius:999px; font-size:13px; display:none; }
+  .tile.hand .handmark { display:block; animation:pulse 1.2s infinite; }
+  @keyframes pulse { 50% { transform:scale(1.12); } }
+  #modal { position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:10; display:none; flex-direction:column; padding:14px; gap:10px; }
+  #modal.show { display:flex; }
+  #modal .top { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+  #modal .top b { font-size:20px; }
+  #modal .body { flex:1; min-height:0; display:flex; gap:10px; }
+  #bigVideo { flex:1; min-width:0; min-height:0; background:#000; object-fit:contain; border-radius:8px; }
+  #modal .side { width:360px; flex:none; display:flex; flex-direction:column; gap:8px; min-height:0; }
+  #mLog { flex:1; min-height:0; overflow-y:auto; background:#0b1220; border-radius:8px; padding:10px; display:flex; flex-direction:column; gap:8px; }
+  .bubble { max-width:88%; padding:7px 11px; border-radius:12px; font-size:15px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+  .bubble small { display:block; font-size:11px; opacity:.7; margin-bottom:2px; }
+  .bubble.t { align-self:flex-end; background:#1e3a8a; }
+  .bubble.s { align-self:flex-start; background:#334155; }
+  .chatEmpty { color:var(--muted); font-size:13px; margin:auto; }
+  #modal .send { display:flex; gap:8px; }
+  #modal .send input { flex:1; min-width:0; font-size:15px; padding:8px; }
+  .quick { display:flex; flex-wrap:wrap; gap:6px; }
+  .quick button { background:#1e3a8a; font-size:12px; text-align:left; }
+  @media (max-width: 900px) { #modal .body { flex-direction:column; } #modal .side { width:auto; height:45%; } }
+  .tile .chatmark { position:absolute; top:6px; left:6px; background:var(--accent); color:#fff; font-weight:800; padding:3px 8px; border-radius:999px; font-size:13px; display:none; }
+  .tile.unread .chatmark { display:block; }
+  .tile.unread { border-color:var(--accent); }
+  .pill.chat { background:#1e3a8a; }
+  dialog { background:var(--panel); color:var(--text); border:1px solid #334155; border-radius:12px; padding:20px; width:min(560px, 92vw); }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  dialog h2 { margin:0 0 6px; font-size:18px; }
+  dialog label { display:block; margin:12px 0 4px; font-size:13px; color:var(--muted); }
+  dialog input { width:100%; font-size:14px; padding:8px; }
+  dialog .btns { display:flex; gap:8px; justify-content:flex-end; margin-top:16px; flex-wrap:wrap; }
+  dialog p { font-size:13px; color:var(--muted); line-height:1.7; margin:4px 0; }
+  .colist { display:flex; flex-direction:column; gap:6px; }
+  .corow { display:flex; align-items:center; gap:8px; background:#0b1220; padding:8px 10px; border-radius:8px; font-size:14px; }
+  .corow .grow { flex:1; }
+  .corow code { font-size:15px; font-weight:800; letter-spacing:1px; color:#fde68a; }
+  .corow .none { color:var(--muted); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  button:disabled:hover { background:#334155; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🖥️ 画面モニター</h1>
+  <div>クラスコード <span id="code" class="code">------</span></div>
+  <span id="role" class="pill">主担当</span>
+  <label class="ctrl">表示名 <input id="tName" maxlength="20" style="width:110px" placeholder="例：田中"></label>
+  <div class="ctrl">
+    <button id="copyBtn" class="primary">生徒用URLをコピー</button>
+    <button id="coBtn">👥 先生 <span id="coCount">1</span>/5</button>
+    <button id="newRoomBtn" class="owner-only">コードを変更</button>
+    <button id="broadcastBtn">📢 全員に送信</button>
+    <button id="logBtn" class="owner-only">📝 記録設定</button>
+    <span id="logStatus" class="pill">記録：未設定</span>
+  </div>
+  <div class="counts">
+    <span class="pill ok" id="cActive">作業中 0</span>
+    <span class="pill warn" id="cWarn">要注意 0</span>
+    <span class="pill bad" id="cAlert">停止 0</span>
+    <span class="pill hand" id="cHand">🙋 0</span>
+    <span class="pill chat" id="cChat">💬 未読 0</span>
+    <span class="pill" id="cOff">未共有・切断 0</span>
+  </div>
+  <div class="ctrl">
+    <label>黄色 <input type="number" id="warnMin" min="0.5" step="0.5" value="2">分</label>
+    <label>赤 <input type="number" id="alertMin" min="1" step="0.5" value="5">分</label>
+    <label>並び順 <select id="sort"><option value="attention">要対応順</option><option value="name">名前順</option></select></label>
+    <label>大きさ <input type="range" id="size" min="150" max="480" value="220"></label>
+    <label><input type="checkbox" id="sound" checked> 🙋で音</label>
+    <button id="cleanBtn">切断者を消す</button>
+  </div>
+</header>
+<div id="banner"></div>
+<div id="grid"><div class="empty" id="empty">
+  生徒の接続を待っています…<br>
+  「生徒用URLをコピー」を押して、Zoomのチャットなどで生徒に送ってください。<br>
+  生徒が共有を始めると、ここに画面が並びます。
+</div></div>
+
+<div id="modal">
+  <div class="top">
+    <b id="mName"></b>
+    <span id="mStatus" style="color:var(--muted)"></span>
+    <span id="mSent" style="color:var(--ok)"></span>
+    <span style="flex:1"></span>
+    <button id="mHandOff">🙋 を解除</button>
+    <button id="mClose" class="primary">閉じる（Esc）</button>
+  </div>
+  <div class="body">
+    <video id="bigVideo" autoplay muted playsinline></video>
+    <div class="side">
+      <div id="mLog"></div>
+      <div class="send">
+        <input id="mText" placeholder="この生徒に送る（Enterで送信）" maxlength="300">
+        <button id="mSend" class="primary">送信</button>
+      </div>
+      <div class="quick">
+        <button>手が止まっているようです。困っていたら🙋ボタンを押してね</button>
+        <button>今からZoomで声をかけます</button>
+        <button>いい調子です！その調子で進めましょう</button>
+        <button>課題のタブに戻りましょう</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<dialog id="coDlg">
+  <h2>👥 先生（主担当＋最大4名）</h2>
+  <p>「先生用URLをコピー」して一緒に見る先生に送ると、その先生はURLを開くだけで参加できます。<br>
+     <b>先生用URLは生徒には絶対に送らないでください</b>（開いた人は先生として全員の画面を見られます）。<br>
+     主担当の先生がページを開いている間だけ、ほかの先生と生徒が使えます。</p>
+  <div class="btns" style="justify-content:flex-start">
+    <button id="coInviteBtn" class="primary">先生用URLをコピー</button>
+    <button id="coRegenBtn" class="owner-only">先生用URLを作り直す</button>
+  </div>
+  <label>参加中の先生</label>
+  <div id="coList" class="colist"></div>
+  <div class="btns"><button id="coClose" class="primary">閉じる</button></div>
+</dialog>
+
+<dialog id="logDlg">
+  <h2>📝 メッセージをスプレッドシートに記録</h2>
+  <p>生徒とのやり取り・全員への送信・🙋ボタンを、Googleスプレッドシートに自動で追記します。<br>
+     準備のしかたは README の「スプレッドシート記録の準備」を見てください。</p>
+  <label for="logUrl">ウェブアプリのURL（https://script.google.com/macros/s/…/exec）</label>
+  <input id="logUrl" autocomplete="off">
+  <label for="logToken">合言葉</label>
+  <input id="logToken" autocomplete="off">
+  <p id="logMsg"></p>
+  <div class="btns">
+    <button id="logClear">記録をやめる</button>
+    <button id="logTest">接続テスト</button>
+    <button id="logSave" class="primary">保存して閉じる</button>
+  </div>
+</dialog>
+
+<script>
+const PREFIX = 'hk-screenmon-v2-';
+const MAX_STUDENTS = 80;
+const $ = id => document.getElementById(id);
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+const CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const newCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), b => CHARS[b % CHARS.length]).join('');
+
+// 主担当（生徒用URLを出す先生）と副担当（招待URL ?co=コード&k=主担当の指紋 で開いた先生）
+const params = new URLSearchParams(location.search);
+const IS_CO = params.has('co');
+const MAX_CO = 4;
+const alnum = s => String(s).replace(/[^A-Za-z0-9]/g, '');
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(36).slice(2));
+
+// 先生用URLの合言葉（t）。主担当のブラウザで作り、先生用URLにだけ入れる。知っている人は先生として参加できる
+const newToken = () => b64uRaw(crypto.getRandomValues(new Uint8Array(16)));
+function b64uRaw(bytes) { return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+
+let room, ownerFp = '', coToken;
+if (IS_CO) {
+  room = (params.get('co') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+  ownerFp = (params.get('k') || '').replace(/[^A-Za-z0-9_-]/g, '');
+  coToken = (params.get('t') || '').replace(/[^A-Za-z0-9_-]/g, '');
+  $('role').textContent = '副担当（接続中…）';
+  // 主担当だけの操作は、同じ位置に灰色で表示する
+  document.querySelectorAll('.owner-only').forEach(b => { b.disabled = true; b.title = '主担当の先生だけが操作できます'; });
+  $('logStatus').textContent = '記録：主担当のパソコンで管理';
+} else {
+  room = store.get('screenmon-teacher-room') || newCode();
+  store.set('screenmon-teacher-room', room);
+  coToken = store.get('screenmon-co-token') || newToken();
+  store.set('screenmon-co-token', coToken);
+}
+const ownerPeerId = () => PREFIX + alnum(ownerFp).slice(0, 10) + '-' + room + '-t';
+const coPeerId = fp => PREFIX + alnum(ownerFp).slice(0, 10) + '-' + room + '-c' + alnum(fp).slice(0, 8);
+
+let myName = (store.get('screenmon-teacher-name') || '').slice(0, 20);
+$('tName').value = myName;
+$('tName').addEventListener('change', () => {
+  myName = $('tName').value.trim().slice(0, 20);
+  store.set('screenmon-teacher-name', myName);
+  if (!IS_CO && peer) sendTeachersToStudents(); // 生徒側の表示名も更新
+});
+const tLabel = () => myName || (IS_CO ? '副担当' : '主担当');
+
+for (const id of ['warnMin', 'alertMin', 'sort', 'size']) {
+  const v = store.get('screenmon-' + id);
+  if (v !== null) $(id).value = v;
+  $(id).addEventListener('change', () => { store.set('screenmon-' + id, $(id).value); applySize(); refreshAll(); });
+}
+$('size').addEventListener('input', applySize);
+function applySize() { document.documentElement.style.setProperty('--tile', $('size').value + 'px'); }
+applySize();
+
+const students = new Map(); // sid -> student
+const byPeer = new Map();   // 生徒の接続ID -> student（本人確認後の hello で登録）
+const pendingCalls = new Map();
+let peer = null, focused = null;
+
+// ---------- 先生の鍵（なりすまし防止） ----------
+// 秘密鍵は取り出し不可の形でこのブラウザの IndexedDB にだけ保存する。
+// 生徒用URLには公開鍵の指紋（k）を入れ、生徒側は署名を確かめてから画面を送る。
+const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+let keyPair = null, pubB64 = '', keyFp = '';
+
+function idb(mode, fn) {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('screenmon', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('keys');
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const tx = req.result.transaction('keys', mode);
+      const r = fn(tx.objectStore('keys'));
+      tx.oncomplete = () => resolve(r && r.result);
+      tx.onerror = () => reject(tx.error);
+    };
+  });
+}
+
+async function initKey() {
+  try {
+    keyPair = await idb('readonly', st => st.get('teacher'));
+  } catch (e) { console.warn('idb', e); }
+  if (!keyPair) {
+    keyPair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']);
+    try {
+      await idb('readwrite', st => st.put({ privateKey: keyPair.privateKey, publicKey: keyPair.publicKey }, 'teacher'));
+    } catch (e) {
+      setBanner('このブラウザでは鍵を保存できません（シークレットウィンドウ等）。ページを開き直すと生徒用URLが変わります。');
+    }
+  }
+  const raw = await crypto.subtle.exportKey('raw', keyPair.publicKey);
+  pubB64 = b64u(raw);
+  keyFp = b64u(await crypto.subtle.digest('SHA-256', raw)).slice(0, 22);
+}
+
+const unb64u = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+const fpOf = async pubB64s => b64u(await crypto.subtle.digest('SHA-256', unb64u(pubB64s))).slice(0, 22);
+// 読み上げて照合する確認コード（0/O・1/I など紛らわしい文字を使わない）
+const shortCode = fp => [...String(fp).slice(0, 6)].map(c => CHARS[c.charCodeAt(0) % CHARS.length]).join('');
+
+async function signText(text) {
+  return b64u(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, keyPair.privateKey, new TextEncoder().encode(text)));
+}
+async function verifyText(pubB64s, text, sigB64) {
+  try {
+    const key = await crypto.subtle.importKey('raw', unb64u(pubB64s), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+    return await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, unb64u(sigB64), new TextEncoder().encode(text));
+  } catch { return false; }
+}
+function signFor(nonce, otherPeerId) {
+  return signText(`screenmon-auth-v2|${room}|${nonce}|${otherPeerId}`);
+}
+
+// ---------- 接続 ----------
+// どの先生のページからでも同じURLを出せるよう、主担当の指紋（ownerFp）で作る
+function studentUrl() {
+  const u = new URL('index.html', location.href);
+  u.search = '?room=' + room + '&k=' + ownerFp;
+  return u.toString();
+}
+function teacherUrl() {
+  const u = new URL('teacher.html', location.href);
+  u.search = '?co=' + room + '&k=' + ownerFp + '&t=' + coToken;
+  return u.toString();
+}
+
+function startPeer() {
+  $('code').textContent = room;
+  if (peer) peer.destroy();
+  byPeer.clear();
+  coTeachers.clear();
+  roster = [];
+  updateCoCount();
+  // PeerJSのIDは英数字と単独の区切り文字しか使えないので、指紋から英数字だけを取り出す
+  peer = new Peer(IS_CO ? coPeerId(keyFp) : ownerPeerId());
+  peer.on('open', () => { setBanner(''); if (IS_CO) connectOwner(); });
+  peer.on('connection', onConnection);
+  peer.on('call', onCall);
+  peer.on('disconnected', () => {
+    setBanner('サーバーとの接続が切れました。再接続しています…');
+    setTimeout(() => { if (!peer.destroyed) peer.reconnect(); }, 2000);
+  });
+  peer.on('error', err => {
+    console.warn(err.type, err);
+    if (err.type === 'peer-unavailable') {
+      if (IS_CO) {
+        setBanner('主担当の先生の入室を待っています。主担当の先生がページを開くと自動で始まります…');
+        $('role').textContent = '副担当（主担当の入室待ち）';
+        scheduleOwnerRetry(5000);
+      }
+    } else if (err.type === 'unavailable-id') {
+      setBanner('このクラスコードは使用中です（別のタブで先生用ページを開いていませんか？）。数秒後に再試行します…　続く場合は「コードを変更」してください。');
+      setTimeout(startPeer, 5000);
+    } else if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(err.type)) {
+      setBanner('ネットワークに接続できません。再試行しています…');
+      setTimeout(startPeer, 5000);
+    }
+  });
+}
+
+function setBanner(t) { $('banner').textContent = t; $('banner').style.display = t ? 'block' : 'none'; }
+
+function getStudent(sid, name) {
+  let s = students.get(sid);
+  if (!s) {
+    if (students.size >= MAX_STUDENTS) return null;
+    const saved = loadChats()[sid] || {};
+    s = { sid, name: saved.name || '', hand: false, sharing: false, connected: false, call: null, conn: null,
+          lastActive: Date.now(), prev: null, el: null, video: null, rate: {},
+          msgs: saved.msgs || [], unread: saved.unread || 0 };
+    buildTile(s);
+    students.set(sid, s);
+    $('empty').style.display = 'none';
+  }
+  if (name) setName(s, name);
+  return s;
+}
+
+// 一定時間内の回数制限（いたずら・大量送信対策）
+function allow(s, kind, max, windowMs) {
+  const now = Date.now();
+  const list = (s.rate[kind] || []).filter(t => now - t < windowMs);
+  if (list.length >= max) { s.rate[kind] = list; return false; }
+  list.push(now);
+  s.rate[kind] = list;
+  return true;
+}
+
+function onConnection(conn) {
+  let challenged = false, s = null, co = null;
+  conn.on('data', async d => {
+    if (!d || typeof d !== 'object') return;
+    // 1) 生徒（または副担当）からの確認要求に、先生の秘密鍵で署名して返す（1接続につき1回だけ）
+    if (d.type === 'challenge') {
+      if (challenged || typeof d.nonce !== 'string' || d.nonce.length > 64) return;
+      challenged = true;
+      conn.send({ type: 'auth', pub: pubB64, sig: await signFor(d.nonce, conn.peer) });
+      return;
+    }
+    // 副担当の参加（主担当のページだけが受け付ける）
+    if (!IS_CO && !s) {
+      if (d.type === 'co-hello') {
+        if (co || typeof d.pub !== 'string' || d.pub.length > 200) return;
+        // 先生用URLの合言葉が合わなければ参加させない（作り直し後の古いURLも含む）
+        if (String(d.token || '') !== coToken) {
+          conn.send({ type: 'co-denied', reason: '先生用URLが古いか正しくありません。主担当の先生に最新の先生用URLをもらってください。' });
+          setTimeout(() => conn.close(), 500);
+          return;
+        }
+        co = { conn, name: String(d.name || '').trim().slice(0, 20) || '先生', pub: d.pub,
+               nonce: b64u(crypto.getRandomValues(new Uint8Array(32))), verified: false, approved: false };
+        conn.send({ type: 'co-challenge', nonce: co.nonce });
+        return;
+      }
+      if (d.type === 'co-proof' && co && !co.verified) {
+        // 副担当が鍵の持ち主であること、接続IDがその鍵から作られたものであることを確かめる
+        const fp = await fpOf(co.pub).catch(() => '');
+        const ok = fp && conn.peer === coPeerId(fp) &&
+          await verifyText(co.pub, `screenmon-co-v2|${room}|${co.nonce}|${conn.peer}`, String(d.sig || ''));
+        if (!ok) { conn.close(); return; }
+        co.verified = true; co.fp = fp;
+        onCoVerified(co);
+        return;
+      }
+      if (co) { if (co.approved) applyHub(d, conn); return; }
+    }
+    // 2) 生徒が先生を確認できたら hello（名前など）が届く
+    if (d.type === 'hello') {
+      if (s) return;
+      const sid = String(d.sid || '');
+      const name = String(d.name || '').trim().slice(0, 40);
+      if (!/^[a-z0-9-]{4,40}$/.test(sid) || !name) { conn.close(); return; }
+      s = getStudent(sid, name);
+      if (!s) { setBanner(`接続人数の上限（${MAX_STUDENTS}人）に達したため、新しい接続を断りました。`); conn.close(); return; }
+      if (s.conn && s.conn !== conn) s.conn.close();
+      s.conn = conn; s.connected = true; s.hand = !!d.hand; s.peerId = conn.peer;
+      byPeer.set(conn.peer, s);
+      const pc = pendingCalls.get(conn.peer);
+      if (pc) { pendingCalls.delete(conn.peer); attachCall(s, pc); }
+      if (!IS_CO) conn.send({ type: 'teachers', list: teachersList(), owner: tLabel() });
+      refreshAll();
+      return;
+    }
+    if (s) onStudentData(s, d);
+  });
+  conn.on('close', () => {
+    if (co) { onCoClosed(co); return; }
+    byPeer.delete(conn.peer);
+    if (s && s.conn === conn) { s.connected = false; s.sharing = false; refresh(s); }
+  });
+}
+
+function onStudentData(s, d) {
+  if (d.type === 'hand') {
+    if (!allow(s, 'hand', 10, 60000)) return;
+    s.hand = !!d.on;
+    if (s.hand && !IS_CO) logRow(s, '生徒', '（🙋 困っていますボタン）');
+    if (s.hand && $('sound').checked) beep();
+  }
+  if (d.type === 'stopped') { s.sharing = false; }
+  if (d.type === 'chat') {
+    if (!allow(s, 'chat', 5, 30000)) return;
+    const text = String(d.text || '').trim().slice(0, 300);
+    if (!text) return;
+    // 生徒のメッセージは各先生に直接届く。記録は主担当だけが行う
+    if (!addMsg(s, 's', text, false, '', String(d.id || '').slice(0, 64) || uid())) return;
+    if (!IS_CO) logRow(s, '生徒', text);
+    if (focused === s) renderLog(); else s.unread++;
+    saveChats();
+    if ($('sound').checked) beep(660);
+  }
+  refreshAll();
+}
+
+// ---------- メッセージ履歴（ブラウザ内に保存） ----------
+const chatKey = () => 'screenmon-chat-' + room;
+function loadChats() {
+  try { return JSON.parse(store.get(chatKey()) || '{}'); } catch { return {}; }
+}
+function saveChats() {
+  const all = loadChats();
+  for (const s of students.values()) {
+    if (s.msgs.length) all[s.sid] = { name: s.name, msgs: s.msgs.slice(-200), unread: s.unread };
+  }
+  store.set(chatKey(), JSON.stringify(all));
+}
+// 同じメッセージ（id）が二重に入らないようにする。追加したら true
+function addMsg(s, from, text, all, by, id, ts) {
+  if (id && s.msgs.some(m => m.id === id)) return false;
+  s.msgs.push({ from, text, ts: Number(ts) || Date.now(), all: !!all, by: by || '', id: id || uid() });
+  if (s.msgs.length > 300) s.msgs = s.msgs.slice(-300);
+  return true;
+}
+function renderLog() {
+  const log = $('mLog');
+  log.innerHTML = '';
+  if (!focused) return;
+  if (!focused.msgs.length) { log.innerHTML = '<span class="chatEmpty">まだメッセージはありません</span>'; return; }
+  for (const m of focused.msgs) {
+    const b = document.createElement('div');
+    b.className = 'bubble ' + m.from;
+    const small = document.createElement('small');
+    const time = new Date(m.ts).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+    small.textContent = (m.from === 't' ? `先生${m.by ? '（' + m.by + '）' : ''}${m.all ? '・全員へ' : ''}` : focused.name) + '　' + time;
+    b.append(small, document.createTextNode(m.text));
+    log.appendChild(b);
+  }
+  log.scrollTop = log.scrollHeight;
+}
+
+// 映像は hello 済み（本人確認の手順を終えた）接続IDからのものだけ受ける
+function onCall(call) {
+  const s = byPeer.get(call.peer);
+  if (s) { attachCall(s, call); return; }
+  if (pendingCalls.size > 20) { call.close(); return; }
+  pendingCalls.set(call.peer, call);
+  setTimeout(() => {
+    if (pendingCalls.get(call.peer) === call) { pendingCalls.delete(call.peer); call.close(); }
+  }, 10000);
+}
+
+function attachCall(s, call) {
+  if (s.call && s.call !== call) s.call.close();
+  s.call = call;
+  call.answer();
+  call.on('stream', st => {
+    s.video.srcObject = st;
+    s.sharing = true; s.lastActive = Date.now(); s.prev = null;
+    if (focused === s) { $('bigVideo').srcObject = st; sendTo(s, { type: 'quality', mode: 'high' }); }
+    refresh(s);
+  });
+  call.on('close', () => { if (s.call === call) { s.sharing = false; refresh(s); } });
+  const pc = call.peerConnection;
+  pc && pc.addEventListener('connectionstatechange', () => {
+    if (s.call !== call) return;
+    if (pc.connectionState === 'failed' || pc.connectionState === 'closed') { s.sharing = false; refresh(s); }
+  });
+}
+
+function sendTo(s, obj) { if (s.conn && s.conn.open) s.conn.send(obj); }
+
+// ---------- 複数の先生（主担当が中継役） ----------
+const coTeachers = new Map(); // 主担当側：指紋 -> 参加中の副担当
+let coBlocked = {};           // 主担当側：外した先生の指紋 -> 名前（先生用URLを作り直すまで有効）
+try { coBlocked = JSON.parse(store.get('screenmon-co-blocked') || '{}'); } catch {}
+let roster = [];              // 参加中の先生の一覧（副担当側は主担当から受け取る）
+
+function teachersList() {
+  return [...coTeachers.values()].filter(c => c.conn.open).slice(0, MAX_CO)
+    .map(c => ({ id: c.conn.peer, fp: c.fp, name: c.name }));
+}
+function currentRoster() {
+  return [{ name: tLabel(), owner: true }, ...teachersList().map(c => ({ name: c.name, fp: c.fp }))];
+}
+function updateCoCount() {
+  $('coCount').textContent = IS_CO ? (roster.length || 1) : 1 + coTeachers.size;
+}
+// 生徒には「画面を送る先生の一覧」、副担当には「参加中の先生の一覧」を配る
+function sendTeachersToStudents() {
+  const list = teachersList();
+  for (const s of students.values()) sendTo(s, { type: 'teachers', list, owner: tLabel() });
+  roster = currentRoster();
+  hubSend({ type: 'roster', list: roster });
+  updateCoCount();
+  renderCoDlg();
+}
+
+function onCoVerified(co) {
+  if (coBlocked[co.fp]) {
+    co.conn.send({ type: 'co-denied', reason: '主担当の先生がこの先生の参加を止めています。' });
+    setTimeout(() => co.conn.close(), 500);
+    return;
+  }
+  const old = coTeachers.get(co.fp);
+  if (!old && coTeachers.size >= MAX_CO) {
+    co.conn.send({ type: 'co-denied', reason: `一緒に見られる先生は主担当を含めて最大${MAX_CO + 1}名です` });
+    setTimeout(() => co.conn.close(), 500);
+    return;
+  }
+  if (old && old.conn !== co.conn) old.conn.close();
+  co.approved = true;
+  coTeachers.set(co.fp, co);
+  // これまでのやり取りを共有する
+  const chats = {};
+  for (const s of students.values()) chats[s.sid] = { name: s.name, msgs: s.msgs.slice(-200) };
+  co.conn.send({ type: 'co-ok', ownerName: tLabel(), chats });
+  sendTeachersToStudents();
+}
+
+function kickCo(fp) {
+  const co = coTeachers.get(fp);
+  if (!co || !confirm(`${co.name} 先生をこのクラスから外しますか？\n（「先生用URLを作り直す」まで、この先生は参加できません）`)) return;
+  coBlocked[fp] = co.name;
+  store.set('screenmon-co-blocked', JSON.stringify(coBlocked));
+  coTeachers.delete(fp);
+  co.conn.send({ type: 'co-denied', reason: '主担当の先生がこのクラスから外しました。' });
+  setTimeout(() => co.conn.close(), 500);
+  sendTeachersToStudents();
+}
+
+// 先生用URLが漏れたときなど：合言葉を作り直し、参加中の副担当も全員外す
+function regenToken() {
+  if (!confirm('先生用URLを作り直しますか？\n今の先生用URLは使えなくなり、参加中のほかの先生もいったん外れます。\n（新しい先生用URLを送り直してください）')) return;
+  coToken = newToken();
+  store.set('screenmon-co-token', coToken);
+  coBlocked = {};
+  store.set('screenmon-co-blocked', '{}');
+  for (const co of coTeachers.values()) {
+    co.conn.send({ type: 'co-denied', reason: '先生用URLが作り直されました。主担当の先生から新しい先生用URLをもらってください。' });
+    setTimeout(() => co.conn.close(), 500);
+  }
+  coTeachers.clear();
+  sendTeachersToStudents();
+}
+
+function onCoClosed(co) {
+  if (coTeachers.get(co.fp) === co) { coTeachers.delete(co.fp); sendTeachersToStudents(); }
+}
+
+function renderCoDlg() {
+  const list = $('coList');
+  list.innerHTML = '';
+  const rows = IS_CO ? roster : currentRoster();
+  if (!rows.length) {
+    const d = document.createElement('div'); d.className = 'corow';
+    d.innerHTML = '<span class="none">主担当の先生の入室を待っています</span>';
+    list.appendChild(d);
+  }
+  for (const t of rows) {
+    const d = document.createElement('div'); d.className = 'corow';
+    d.innerHTML = '<span class="grow"></span><span class="st"></span>';
+    d.querySelector('.grow').textContent = String(t.name || '先生').slice(0, 20);
+    d.querySelector('.st').textContent = t.owner ? '主担当' : '副担当';
+    if (!t.owner) {
+      const b = document.createElement('button');
+      b.textContent = '外す';
+      if (IS_CO) { b.disabled = true; b.title = '主担当の先生だけが操作できます'; }
+      else b.onclick = () => kickCo(t.fp);
+      d.appendChild(b);
+    }
+    list.appendChild(d);
+  }
+}
+
+// 先生どうしの連絡：副担当→主担当→ほかの副担当、の順に中継する
+function hubSend(obj, exceptConn) {
+  if (IS_CO) { if (ownerOk && ownerConn && ownerConn.open) ownerConn.send(obj); return; }
+  for (const c of coTeachers.values()) if (c.conn !== exceptConn && c.conn.open) c.conn.send(obj);
+}
+
+function applyHub(d, fromConn) {
+  const text = String(d.text || '').slice(0, 1000);
+  const by = String(d.by || '').slice(0, 20);
+  const id = String(d.id || '').slice(0, 64);
+  if (!text || !id) return;
+  if (d.type === 't-msg') {
+    const sid = String(d.sid || '');
+    if (!/^[a-z0-9-]{4,40}$/.test(sid)) return;
+    const s = getStudent(sid, String(d.name || '').slice(0, 40));
+    if (!s || !addMsg(s, 't', text, false, by, id, d.ts)) return;
+    if (!IS_CO) { logRow(s, `先生（${by}）`, text); hubSend(d, fromConn); }
+    if (focused === s) renderLog();
+  } else if (d.type === 't-bcast') {
+    let added = false;
+    for (const s of students.values()) added = addMsg(s, 't', text, true, by, id, d.ts) || added;
+    if (!added) return;
+    if (!IS_CO) { logRow(null, `先生（${by}）→全員`, `${text}（${Number(d.n) || 0}人に送信）`); hubSend(d, fromConn); }
+    if (focused) renderLog();
+  } else return;
+  saveChats();
+  refreshAll();
+}
+
+// 副担当側：主担当のページに接続し、本人確認 → 参加申請 → 承認
+let ownerConn = null, ownerOk = false, ownerRetry = null;
+function scheduleOwnerRetry(ms) { clearTimeout(ownerRetry); ownerRetry = setTimeout(connectOwner, ms); }
+
+function connectOwner() {
+  clearTimeout(ownerRetry);
+  ownerOk = false;
+  if (ownerConn) { ownerConn.removeAllListeners(); ownerConn.close(); }
+  const c = ownerConn = peer.connect(ownerPeerId(), { reliable: true });
+  const nonce = b64u(crypto.getRandomValues(new Uint8Array(32)));
+  let verified = false;
+  // 主担当がまだ入室していないと、エラーが返らずに待たされることがあるので、一定時間で接続し直す
+  const openTimer = setTimeout(() => {
+    if (ownerConn === c && !c.open) {
+      setBanner('主担当の先生の入室を待っています。主担当の先生がページを開くと自動で始まります…');
+      $('role').textContent = '副担当（主担当の入室待ち）';
+      scheduleOwnerRetry(1000);
+    }
+  }, 8000);
+  c.on('open', () => { clearTimeout(openTimer); c.send({ type: 'challenge', nonce }); });
+  c.on('data', async d => {
+    if (ownerConn !== c || !d || typeof d !== 'object') return;
+    if (!verified) {
+      if (d.type !== 'auth') return;
+      const ok = typeof d.pub === 'string' && (await fpOf(d.pub).catch(() => '')) === ownerFp &&
+        await verifyText(d.pub, `screenmon-auth-v2|${room}|${nonce}|${peer.id}`, String(d.sig || ''));
+      if (!ok) {
+        setBanner('⚠️ 接続先が主担当の先生本人と確認できませんでした。招待URLを確認してください。');
+        ownerConn = null; c.close(); scheduleOwnerRetry(15000);
+        return;
+      }
+      verified = true;
+      c.send({ type: 'co-hello', name: tLabel(), pub: pubB64, token: coToken });
+      $('role').textContent = '副担当（参加手続き中…）';
+      return;
+    }
+    if (d.type === 'roster') {
+      roster = (Array.isArray(d.list) ? d.list : []).slice(0, MAX_CO + 1)
+        .map(t => ({ name: String(t && t.name || '先生').slice(0, 20), owner: !!(t && t.owner), fp: String(t && t.fp || '') }));
+      updateCoCount();
+      renderCoDlg();
+      return;
+    }
+    if (d.type === 'co-challenge') {
+      c.send({ type: 'co-proof', sig: await signText(`screenmon-co-v2|${room}|${String(d.nonce || '').slice(0, 64)}|${peer.id}`) });
+    } else if (d.type === 'co-ok') {
+      ownerOk = true;
+      $('role').textContent = `副担当（主担当：${String(d.ownerName || '').slice(0, 20)}）`;
+      setBanner('');
+      for (const [sid, v] of Object.entries(d.chats || {})) {
+        if (!/^[a-z0-9-]{4,40}$/.test(sid) || !v || !Array.isArray(v.msgs)) continue;
+        const s = getStudent(sid, String(v.name || '').slice(0, 40));
+        if (!s) continue;
+        for (const m of v.msgs.slice(-200)) {
+          addMsg(s, m.from === 's' ? 's' : 't', String(m.text || '').slice(0, 1000), !!m.all, String(m.by || '').slice(0, 20), String(m.id || '').slice(0, 64), m.ts);
+        }
+        s.msgs.sort((a, b) => a.ts - b.ts);
+      }
+      saveChats();
+      refreshAll();
+    } else if (d.type === 'co-denied') {
+      setBanner('⚠️ ' + String(d.reason || '参加できませんでした').slice(0, 60));
+      $('role').textContent = '副担当（参加できません）';
+      ownerConn = null; c.close();
+    } else if (ownerOk) {
+      applyHub(d, c);
+    }
+  });
+  c.on('close', () => {
+    if (ownerConn !== c) return;
+    ownerOk = false;
+    $('role').textContent = '副担当（再接続中…）';
+    setBanner('主担当の先生との接続が切れました。再接続しています…');
+    scheduleOwnerRetry(5000);
+  });
+}
+
+$('coBtn').onclick = () => { renderCoDlg(); $('coDlg').showModal(); };
+$('coClose').onclick = () => $('coDlg').close();
+$('coInviteBtn').onclick = async () => {
+  if (!keyFp) { alert('準備中です。数秒待ってからもう一度押してください。'); return; }
+  const url = teacherUrl();
+  try { await navigator.clipboard.writeText(url); $('coInviteBtn').textContent = 'コピーしました ✓'; }
+  catch { prompt('このURLを一緒に見る先生に送ってください（生徒には絶対に送らないでください）', url); }
+  setTimeout(() => $('coInviteBtn').textContent = '先生用URLをコピー', 2000);
+};
+$('coRegenBtn').onclick = () => { if (!IS_CO) regenToken(); };
+
+// ---------- 表示 ----------
+function buildTile(s) {
+  const el = document.createElement('div');
+  el.className = 'tile off';
+  el.innerHTML = '<video autoplay muted playsinline></video><span class="handmark">🙋 困っています</span><span class="chatmark"></span><div class="info"><span class="nm"></span><span class="st"></span></div>';
+  s.el = el; s.video = el.querySelector('video');
+  el.onclick = () => openModal(s);
+  $('grid').appendChild(el);
+}
+
+function setName(s, n) { s.name = n; s.el.querySelector('.nm').textContent = n; s.el.title = n; }
+
+function fmt(ms) {
+  const sec = Math.floor(ms / 1000);
+  return sec < 60 ? `${sec}秒` : `${Math.floor(sec / 60)}分${String(sec % 60).padStart(2, '0')}秒`;
+}
+
+function stateOf(s) {
+  if (!s.sharing) return { cls: 'off', label: s.connected ? '⛔ 共有停止' : '🔌 切断', rank: 1, idle: 0 };
+  const idle = Date.now() - s.lastActive;
+  const w = parseFloat($('warnMin').value) * 60000, a = parseFloat($('alertMin').value) * 60000;
+  if (idle >= a) return { cls: 'alert', label: `⏸ ${fmt(idle)} 変化なし`, rank: 2, idle };
+  if (idle >= w) return { cls: 'warn', label: `⏸ ${fmt(idle)} 変化なし`, rank: 2, idle };
+  return { cls: 'active', label: idle > 15000 ? `✏️ ${fmt(idle)}前に変化` : '✏️ 作業中', rank: 3, idle };
+}
+
+function refresh(s) {
+  const st = stateOf(s);
+  s.state = st;
+  s.el.className = 'tile ' + st.cls + (s.hand ? ' hand' : '') + (s.unread ? ' unread' : '');
+  s.el.querySelector('.st').textContent = st.label;
+  s.el.querySelector('.chatmark').textContent = '💬 ' + s.unread;
+}
+
+function refreshAll() {
+  const c = { active: 0, warn: 0, alert: 0, off: 0, hand: 0, chat: 0 };
+  for (const s of students.values()) { refresh(s); c[s.state.cls]++; if (s.hand) c.hand++; c.chat += s.unread; }
+  $('cChat').textContent = `💬 未読 ${c.chat}`;
+  $('cActive').textContent = `作業中 ${c.active}`;
+  $('cWarn').textContent = `要注意 ${c.warn}`;
+  $('cAlert').textContent = `停止 ${c.alert}`;
+  $('cHand').textContent = `🙋 ${c.hand}`;
+  $('cOff').textContent = `未共有・切断 ${c.off}`;
+  document.title = (c.hand ? `🙋${c.hand} ` : '') + (c.chat ? `💬${c.chat} ` : '') + '画面モニター（先生用）';
+
+  // 並び順：CSSのorderで入れ替える（映像を再読み込みさせないため）
+  const list = [...students.values()];
+  const byName = (a, b) => a.name.localeCompare(b.name, 'ja', { numeric: true });
+  if ($('sort').value === 'attention') {
+    const need = s => (s.hand ? 2 : 0) + (s.unread ? 1 : 0);
+    list.sort((a, b) => (need(b) - need(a)) || (a.state.rank - b.state.rank) || (b.state.idle - a.state.idle) || byName(a, b));
+  } else list.sort(byName);
+  list.forEach((s, i) => { s.el.style.order = i; });
+  if (focused) updateModal();
+}
+
+// ---------- 画面の変化検出 ----------
+const cv = document.createElement('canvas');
+cv.width = 64; cv.height = 36;
+const cx = cv.getContext('2d', { willReadFrequently: true });
+const ROWS = 32; // 下端（Chromebookのシェルフ・時計）を除外
+
+function checkActivity() {
+  for (const s of students.values()) {
+    if (!s.sharing || s.video.readyState < 2) continue;
+    try {
+      cx.drawImage(s.video, 0, 0, 64, 36);
+      const px = cx.getImageData(0, 0, 64, ROWS).data;
+      const gray = new Uint8Array(64 * ROWS);
+      for (let i = 0; i < gray.length; i++) gray[i] = (px[i * 4] * 3 + px[i * 4 + 1] * 6 + px[i * 4 + 2]) / 10;
+      if (s.prev) {
+        let changed = 0;
+        for (let i = 0; i < gray.length; i++) if (Math.abs(gray[i] - s.prev[i]) > 18) changed++;
+        if (changed >= 2) s.lastActive = Date.now();
+      }
+      s.prev = gray;
+    } catch (e) { /* フレーム未到着 */ }
+  }
+  refreshAll();
+}
+setInterval(checkActivity, 1000);
+
+// ---------- 拡大表示 ----------
+function openModal(s) {
+  if (focused && focused !== s) sendTo(focused, { type: 'quality', mode: 'low' });
+  focused = s;
+  $('bigVideo').srcObject = s.video.srcObject;
+  sendTo(s, { type: 'quality', mode: 'high' });
+  $('modal').classList.add('show');
+  if (s.unread) { s.unread = 0; saveChats(); refreshAll(); }
+  updateModal();
+  renderLog();
+  $('mSent').textContent = '';
+  $('mText').value = '';
+  $('mText').focus();
+}
+function closeModal() {
+  if (focused) sendTo(focused, { type: 'quality', mode: 'low' });
+  focused = null;
+  $('bigVideo').srcObject = null;
+  $('modal').classList.remove('show');
+}
+function updateModal() {
+  if (!focused) return;
+  $('mName').textContent = focused.name + (focused.hand ? '　🙋 困っています' : '');
+  $('mStatus').textContent = focused.state ? focused.state.label : '';
+  $('mHandOff').style.display = focused.hand ? '' : 'none';
+}
+function sendMsg(text) {
+  text = text.trim();
+  if (!text || !focused) return;
+  if (!(focused.conn && focused.conn.open)) { alert('この生徒とは今つながっていません'); return; }
+  const id = uid(), ts = Date.now(), by = tLabel();
+  sendTo(focused, { type: 'msg', text, by });
+  addMsg(focused, 't', text, false, by, id, ts);
+  if (!IS_CO) logRow(focused, `先生（${by}）`, text);
+  hubSend({ type: 't-msg', sid: focused.sid, name: focused.name, text, by, id, ts });
+  saveChats();
+  renderLog();
+  $('mText').value = '';
+  $('mSent').textContent = '';
+}
+
+$('broadcastBtn').onclick = () => {
+  const targets = [...students.values()].filter(s => s.conn && s.conn.open);
+  if (!targets.length) { alert('つながっている生徒がいません'); return; }
+  const text = (prompt(`つながっている生徒 ${targets.length} 人全員に送るメッセージ`) || '').trim().slice(0, 300);
+  if (!text) return;
+  const id = uid(), ts = Date.now(), by = tLabel();
+  for (const s of targets) { sendTo(s, { type: 'msg', text, all: true, by }); addMsg(s, 't', text, true, by, id, ts); }
+  if (!IS_CO) logRow(null, `先生（${by}）→全員`, `${text}（${targets.length}人に送信）`);
+  hubSend({ type: 't-bcast', text, by, id, ts, n: targets.length });
+  saveChats();
+  if (focused) renderLog();
+  $('broadcastBtn').textContent = `✅ ${targets.length}人に送信`;
+  setTimeout(() => $('broadcastBtn').textContent = '📢 全員に送信', 2500);
+};
+$('mClose').onclick = closeModal;
+$('mSend').onclick = () => sendMsg($('mText').value);
+$('mText').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) sendMsg($('mText').value); });
+document.querySelectorAll('.quick button').forEach(b => b.onclick = () => sendMsg(b.textContent));
+$('mHandOff').onclick = () => { if (!focused) return; sendTo(focused, { type: 'hand-off' }); focused.hand = false; refreshAll(); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+// ---------- ボタン ----------
+$('copyBtn').onclick = async () => {
+  if (!keyFp) { alert('準備中です。数秒待ってからもう一度押してください。'); return; }
+  const url = studentUrl();
+  try { await navigator.clipboard.writeText(url); $('copyBtn').textContent = 'コピーしました ✓'; }
+  catch { prompt('このURLを生徒に送ってください', url); }
+  setTimeout(() => $('copyBtn').textContent = '生徒用URLをコピー', 2000);
+};
+$('newRoomBtn').onclick = () => {
+  if (!confirm('クラスコードを新しくします。今つながっている生徒は切断され、このコードのメッセージ履歴（このパソコン内の分）も消去されます。\n※スプレッドシートの記録は消えません。よろしいですか？')) return;
+  try { localStorage.removeItem(chatKey()); } catch {}
+  room = newCode(); store.set('screenmon-teacher-room', room);
+  for (const s of students.values()) s.el.remove();
+  students.clear();
+  $('empty').style.display = '';
+  startPeer();
+};
+$('cleanBtn').onclick = () => {
+  for (const [sid, s] of students) {
+    if (!s.connected && !s.sharing) { s.el.remove(); students.delete(sid); }
+  }
+  if (!students.size) $('empty').style.display = '';
+};
+
+// ---------- スプレッドシート記録 ----------
+// 送れなかった分はブラウザ内にためておき、5秒ごとに再送する（GAS側でメッセージIDにより重複排除）
+let logCfg = {};
+try { logCfg = JSON.parse(store.get('screenmon-log') || '{}'); } catch {}
+let logQueue = [];
+try { logQueue = JSON.parse(store.get('screenmon-logq') || '[]'); } catch {}
+let logBusy = false, logError = '';
+
+function logRow(s, from, text) {
+  if (!logCfg.url) return;
+  logQueue.push({
+    id: (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random()),
+    ts: Date.now(), room, from, text,
+    name: s ? s.name : '全員', sid: s ? s.sid : '',
+  });
+  if (logQueue.length > 5000) logQueue = logQueue.slice(-5000);
+  store.set('screenmon-logq', JSON.stringify(logQueue));
+  updateLogStatus();
+  flushLog();
+}
+
+async function postLog(url, token, rows) {
+  const res = await fetch(url, { method: 'POST', body: JSON.stringify({ token, rows }) });
+  return res.json();
+}
+
+async function flushLog() {
+  if (logBusy || !logCfg.url || !logQueue.length) return;
+  logBusy = true;
+  const batch = logQueue.slice(0, 100);
+  try {
+    const r = await postLog(logCfg.url, logCfg.token, batch);
+    if (r && r.ok) {
+      const sent = new Set(batch.map(x => x.id));
+      logQueue = logQueue.filter(x => !sent.has(x.id));
+      store.set('screenmon-logq', JSON.stringify(logQueue));
+      logError = '';
+    } else logError = (r && r.error) || '保存に失敗';
+  } catch (e) {
+    logError = '通信エラー';
+  }
+  logBusy = false;
+  updateLogStatus();
+}
+setInterval(flushLog, 5000);
+
+function updateLogStatus() {
+  const el = $('logStatus');
+  if (IS_CO) { el.textContent = '記録：主担当のパソコンで管理'; el.className = 'pill'; return; }
+  if (!logCfg.url) { el.textContent = '記録：未設定'; el.className = 'pill'; return; }
+  if (logError) { el.textContent = `記録：⚠️ ${logError}（未送信 ${logQueue.length}件）`; el.className = 'pill bad'; return; }
+  el.textContent = logQueue.length ? `記録：送信待ち ${logQueue.length}件` : '記録：✅ 保存中';
+  el.className = 'pill ' + (logQueue.length ? 'warn' : 'ok');
+}
+updateLogStatus();
+
+$('logBtn').onclick = () => {
+  $('logUrl').value = logCfg.url || '';
+  $('logToken').value = logCfg.token || '';
+  $('logMsg').textContent = '';
+  $('logDlg').showModal();
+};
+$('logTest').onclick = async () => {
+  const url = $('logUrl').value.trim(), token = $('logToken').value.trim();
+  if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(url)) { $('logMsg').textContent = '⚠️ URLは https://script.google.com/…/exec の形で入力してください'; return; }
+  $('logMsg').textContent = 'テスト中…';
+  try {
+    const r = await postLog(url, token, [{ id: 'test-' + Date.now(), ts: Date.now(), room, name: '（接続テスト）', sid: '', from: '先生', text: '接続テストです' }]);
+    $('logMsg').textContent = r && r.ok ? '✅ 成功しました。スプレッドシートに「接続テストです」の行が追加されています。' : '⚠️ ' + ((r && r.error) || '失敗しました');
+  } catch (e) {
+    $('logMsg').textContent = '⚠️ 接続できません。URLと、デプロイ時の「アクセスできるユーザー：全員」を確認してください。';
+  }
+};
+$('logSave').onclick = () => {
+  const url = $('logUrl').value.trim();
+  if (url && !/^https:\/\/script\.google\.com\/.+\/exec$/.test(url)) { $('logMsg').textContent = '⚠️ URLは https://script.google.com/…/exec の形で入力してください'; return; }
+  logCfg = { url, token: $('logToken').value.trim() };
+  store.set('screenmon-log', JSON.stringify(logCfg));
+  logError = '';
+  updateLogStatus();
+  flushLog();
+  $('logDlg').close();
+};
+$('logClear').onclick = () => {
+  if (!confirm('スプレッドシートへの記録をやめますか？（送信待ちの分も破棄します）')) return;
+  logCfg = {}; logQueue = [];
+  store.set('screenmon-log', '{}'); store.set('screenmon-logq', '[]');
+  updateLogStatus();
+  $('logDlg').close();
+};
+
+let actx = null;
+function beep(freq = 880) {
+  try {
+    actx = actx || new AudioContext();
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.frequency.value = freq; g.gain.value = 0.15;
+    o.connect(g).connect(actx.destination);
+    o.start(); o.stop(actx.currentTime + 0.25);
+  } catch {}
+}
+
+window.addEventListener('beforeunload', e => { if (students.size) { e.preventDefault(); e.returnValue = ''; } });
+
+(async () => {
+  if (!(window.crypto && crypto.subtle)) {
+    setBanner('このページは https で開いてください（安全な接続でないと本人確認の鍵が使えません）。');
+    return;
+  }
+  if (IS_CO) {
+    if (room.length < 4 || ownerFp.length !== 22 || coToken.length !== 22) {
+      setBanner('⚠️ 先生用URLが正しくありません。主担当の先生から送られたURLを、最後までそのまま開いてください。');
+      return;
+    }
+    while (!myName) {
+      myName = (prompt('あなたの表示名を入力してください（例：田中）。生徒と主担当の先生に表示されます。') || '').trim().slice(0, 20);
+      if (!myName && !confirm('表示名がないと参加できません。入力し直しますか？')) return;
+    }
+    store.set('screenmon-teacher-name', myName);
+    $('tName').value = myName;
+    $('empty').innerHTML = '主担当の先生の入室を待っています…<br>主担当の先生がページを開くと、生徒の画面がここに並びます。';
+  }
+  await initKey();
+  if (!IS_CO) ownerFp = keyFp;
+  startPeer();
+})();
+</script>
+</body>
+</html>
