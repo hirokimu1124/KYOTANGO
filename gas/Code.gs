@@ -74,7 +74,7 @@ function doPost(e) {
         seen.add(id);
         out.push([
           Utilities.formatDate(new Date(Number(r.ts) || Date.now()), tz, 'yyyy/MM/dd HH:mm:ss'),
-          clean_(r.room, 20),
+          clean_(r.room, 40),
           clean_(r.name, 60),
           clean_(r.from, 20),
           clean_(r.text, 2000),
