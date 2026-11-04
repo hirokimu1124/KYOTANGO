@@ -349,6 +349,8 @@ function bookmarkUrl(c) {
 
 function startPeer() {
   $('code').textContent = room;
+  logRoomLabel = (cur && cur.name ? cur.name + '／' : '') + room;
+  deniedLogged = 0;
   if (peer) peer.destroy();
   byPeer.clear();
   coTeachers.clear();
@@ -364,6 +366,7 @@ function startPeer() {
     hadOpened = true; signalTries = 0; clearTimeout(signalRetry);
     setBanner('');
     if (IS_CO && first) connectOwner();
+    if (!IS_CO && first) logTeacherJoin();
   });
   p.on('connection', onConnection);
   p.on('call', onCall);
@@ -471,6 +474,7 @@ function onConnection(conn) {
         if (co || typeof d.pub !== 'string' || d.pub.length > 200) return;
         // 先生用URLの合言葉が合わなければ参加させない（作り直し後の古いURLも含む）
         if (String(d.token || '') !== coToken) {
+          logCoDenied(conn, d.name, '先生用URLが古いか正しくない');
           conn.send({ type: 'co-denied', reason: '先生用URLが古いか正しくありません。主担当の先生に最新の先生用URLをもらってください。' });
           setTimeout(() => conn.close(), 500);
           return;
@@ -529,7 +533,7 @@ function onConnection(conn) {
 // 見えないときは、生徒側が知らせてきた接続候補（SDP の srflx＝インターネット側のアドレス）を使う。
 const isIpAddr = a => /^(\d{1,3}\.){3}\d{1,3}$/.test(a) || (/^[0-9a-f:]+$/i.test(a) && a.includes(':'));
 async function peerAddress(pc) {
-  const out = { ip: '', route: '' };
+  const out = { ip: '', route: '', localIp: '' };
   if (!pc) return out;
   try {
     const stats = await pc.getStats();
@@ -548,13 +552,41 @@ async function peerAddress(pc) {
     }
     const a = remote && String(remote.address || remote.ip || '');
     if (remote && remote.candidateType !== 'relay' && isIpAddr(a)) out.ip = a;
+    const la = local && String(local.address || local.ip || '');
+    if (local && ['srflx', 'prflx'].includes(local.candidateType) && isIpAddr(la)) out.localIp = la;
+    else if (local && local.candidateType === 'host' && isIpAddr(la)) out.hostIp = la;
   } catch { /* 接続の切り替え中 */ }
-  if (!out.ip) {
-    const sdp = (pc.remoteDescription && pc.remoteDescription.sdp) || '';
-    const m = sdp.match(/a=candidate:\S+ \d+ \S+ \d+ (\S+) \d+ typ srflx/i);
-    if (m && isIpAddr(m[1])) out.ip = m[1];
-  }
+  // 先生側：インターネット側のアドレスを優先し、無ければ端末のアドレス（社内・校内のアドレスのことがある）
+  if (!out.localIp) out.localIp = srflxIn(pc.localDescription) || out.hostIp || '';
+  if (!out.ip) out.ip = srflxIn(pc.remoteDescription);
   return out;
+}
+// SDP にある srflx 候補（インターネット側のアドレス）を取り出す
+function srflxIn(desc) {
+  const m = ((desc && desc.sdp) || '').match(/a=candidate:\S+ \d+ \S+ \d+ (\S+) \d+ typ srflx/i);
+  return m && isIpAddr(m[1]) ? m[1] : '';
+}
+
+// 先生自身のインターネット側のIPアドレスを、STUN サーバーに問い合わせて調べる（最大5秒）
+function ownPublicIp() {
+  return new Promise(resolve => {
+    let pc, done = false, hostIp = '';
+    const finish = ip => { if (done) return; done = true; try { pc.close(); } catch {} resolve(ip || hostIp || ''); };
+    try {
+      const ice = (peer && peer.options && peer.options.config && peer.options.config.iceServers) || [];
+      pc = new RTCPeerConnection({ iceServers: ice.filter(s => String(s.urls || s.url || '').startsWith('stun')) });
+      pc.createDataChannel('ip');
+      pc.onicecandidate = e => {
+        if (!e.candidate) { finish(''); return; }
+        const m = String(e.candidate.candidate).match(/ (\S+) \d+ typ srflx/);
+        if (m && isIpAddr(m[1])) finish(m[1]);
+        const h = String(e.candidate.candidate).match(/ (\S+) \d+ typ host/);
+        if (h && isIpAddr(h[1])) hostIp = hostIp || h[1];
+      };
+      pc.createOffer().then(o => pc.setLocalDescription(o)).catch(() => finish(''));
+      setTimeout(() => finish(''), 5000);
+    } catch { finish(''); }
+  });
 }
 
 const fmtDur = ms => {
@@ -575,6 +607,7 @@ async function logJoin(s, conn, rejoin) {
   }
   if (s.conn !== conn || !s.visit) return;
   s.visit.ip = info.ip;
+  if (info.localIp) teacherIpFound(info.localIp);
   const ipText = info.ip || '不明';
   const route = info.route ? `・${info.route}` : '';
   let text;
@@ -590,12 +623,74 @@ function logLeave(s, label) {
   logRow(s, '入退室', `${label}（IP ${v.ip || '不明'}・滞在 ${fmtDur(Date.now() - v.since)}）`, { ip: v.ip });
 }
 
-// 先生のページを閉じると以後の退室は分からないため、その時点で接続中の生徒を区切りとして記録する
-// （記録は待ち行列に保存され、次にページを開いたときに送られる）
-window.addEventListener('pagehide', () => {
+// ---------- 先生側の入退室 ----------
+// 主担当：学級のページを開いた（仲介サーバーにつながった）時点で入室、閉じる・学級を切り替える時点で退室。
+// 副担当：主担当が参加を承認した時点で入室、接続が切れた時点で退室。参加を断った場合も記録する。
+let teacherVisit = null, deniedLogged = 0;
+const ownerSubject = () => ({ name: `先生（${tLabel()}・主担当）`, sid: '' });
+const coSubject = co => ({ name: `先生（${co.name}・副担当）`, sid: '' });
+
+async function logTeacherJoin() {
+  if (IS_CO || teacherVisit) return;
+  const v = teacherVisit = { since: Date.now(), ip: '', logged: false };
+  const ip = await ownPublicIp();
+  if (teacherVisit !== v) return;
+  if (ip) { teacherIpFound(ip); return; }
+  // STUN で分からなければ、最初の生徒・副担当との接続から分かった時点で記録する（日時は入室時刻）。
+  // 30秒たっても分からなければ「不明」で記録する
+  setTimeout(() => { if (teacherVisit === v) teacherIpFound(''); }, 30000);
+}
+function teacherIpFound(ip) {
+  const v = teacherVisit;
+  if (!v || v.logged) return;
+  v.logged = true; v.ip = ip;
+  logRow(ownerSubject(), '入退室', `入室（IP ${ip || '不明'}）`, { ip, ts: v.since });
+}
+function logTeacherLeave(label) {
+  const v = teacherVisit;
+  if (!v) return;
+  if (!v.logged) teacherIpFound('');
+  teacherVisit = null;
+  logRow(ownerSubject(), '入退室', `${label}（IP ${v.ip || '不明'}・滞在 ${fmtDur(Date.now() - v.since)}）`, { ip: v.ip });
+}
+
+async function logCoJoin(co) {
+  co.visit = { since: Date.now(), ip: '' };
+  let info = { ip: '', route: '' };
+  for (let i = 0; i < 4 && !info.ip; i++) {
+    if (i) await new Promise(r => setTimeout(r, 1500));
+    info = await peerAddress(co.conn.peerConnection);
+  }
+  if (!co.visit) return;
+  co.visit.ip = info.ip;
+  if (info.localIp) teacherIpFound(info.localIp);
+  logRow(coSubject(co), '入退室', `入室（IP ${info.ip || '不明'}${info.route ? '・' + info.route : ''}）`, { ip: info.ip });
+}
+function logCoLeave(co, label) {
+  const v = co.visit;
+  if (!v) return;
+  co.visit = null;
+  logRow(coSubject(co), '入退室', `${label || co.leaveLabel || '退室'}（IP ${v.ip || '不明'}・滞在 ${fmtDur(Date.now() - v.since)}）`, { ip: v.ip });
+}
+// 参加を断った記録（いたずらで記録があふれないよう、1回の授業で20件まで）
+async function logCoDenied(conn, name, reason) {
+  if (IS_CO || deniedLogged >= 20) return;
+  deniedLogged++;
+  const info = await peerAddress(conn.peerConnection);
+  logRow({ name: `先生（${String(name || '').trim().slice(0, 20) || '名前なし'}・副担当として参加しようとした）`, sid: '' },
+    '入退室', `参加を拒否：${reason}（IP ${info.ip || '不明'}${info.route ? '・' + info.route : ''}）`, { ip: info.ip });
+}
+
+// 記録の区切り：生徒・副担当・主担当自身の退室をまとめて記録する（学級の切り替え・ページを閉じるとき）
+function endLogSession(label) {
   if (IS_CO) return;
-  for (const s of students.values()) if (s.visit) logLeave(s, '記録終了：先生のページを閉じた');
-});
+  for (const s of students.values()) if (s.visit) logLeave(s, label);
+  for (const co of coTeachers.values()) logCoLeave(co, label);
+  logTeacherLeave(label);
+}
+// 先生のページを閉じると以後の退室は分からないため、その時点で接続中の人を区切りとして記録する
+// （記録は待ち行列に保存され、次にページを開いたときに送られる）
+window.addEventListener('pagehide', () => endLogSession('記録終了：先生のページを閉じた'));
 
 function onStudentData(s, d) {
   if (d.type === 'hand') {
@@ -723,19 +818,22 @@ function sendTeachersToStudents() {
 
 function onCoVerified(co) {
   if (coBlocked[co.fp]) {
+    logCoDenied(co.conn, co.name, '主担当が外した先生');
     co.conn.send({ type: 'co-denied', reason: '主担当の先生がこの先生の参加を止めています。' });
     setTimeout(() => co.conn.close(), 500);
     return;
   }
   const old = coTeachers.get(co.fp);
   if (!old && coTeachers.size >= MAX_CO) {
+    logCoDenied(co.conn, co.name, '人数の上限');
     co.conn.send({ type: 'co-denied', reason: `一緒に見られる先生は主担当を含めて最大${MAX_CO + 1}名です` });
     setTimeout(() => co.conn.close(), 500);
     return;
   }
-  if (old && old.conn !== co.conn) old.conn.close();
+  if (old && old.conn !== co.conn) { logCoLeave(old, '退室（つなぎ直し）'); old.conn.close(); }
   co.approved = true;
   coTeachers.set(co.fp, co);
+  logCoJoin(co);
   // これまでのやり取りを共有する
   const chats = {};
   for (const s of students.values()) chats[s.sid] = { name: s.name, msgs: s.msgs.slice(-200) };
@@ -749,6 +847,7 @@ function kickCo(fp) {
   coBlocked[fp] = co.name;
   store.set(blockedKey(), JSON.stringify(coBlocked));
   coTeachers.delete(fp);
+  logCoLeave(co, '退室（主担当が外した）');
   co.conn.send({ type: 'co-denied', reason: '主担当の先生がこのクラスから外しました。' });
   setTimeout(() => co.conn.close(), 500);
   sendTeachersToStudents();
@@ -762,6 +861,7 @@ function regenToken() {
   coBlocked = {};
   store.set(blockedKey(), '{}');
   for (const co of coTeachers.values()) {
+    logCoLeave(co, '退室（先生用URLを作り直した）');
     co.conn.send({ type: 'co-denied', reason: '先生用URLが作り直されました。主担当の先生から新しい先生用URLをもらってください。' });
     setTimeout(() => co.conn.close(), 500);
   }
@@ -770,6 +870,7 @@ function regenToken() {
 }
 
 function onCoClosed(co) {
+  logCoLeave(co);
   if (coTeachers.get(co.fp) === co) { coTeachers.delete(co.fp); sendTeachersToStudents(); }
 }
 
@@ -1154,6 +1255,7 @@ function clearTiles() {
 
 function switchToClass(c, force) {
   if (!force && c === cur) return;
+  endLogSession('退室（先生が学級を切り替えた）');
   cur = c; room = c.room; coToken = c.token;
   saveClasses();
   loadBlocked();
@@ -1261,11 +1363,12 @@ let logQueue = [];
 try { logQueue = JSON.parse(store.get('screenmon-logq') || '[]'); } catch {}
 let logBusy = false, logError = '';
 
+let logRoomLabel = '';
 function logRow(s, from, text, extra) {
   if (!logCfg.url) return;
   logQueue.push({
     id: (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random()),
-    ts: Date.now(), room: (cur && cur.name ? cur.name + '／' : '') + room, from, text,
+    ts: (extra && extra.ts) || Date.now(), room: logRoomLabel || ((cur && cur.name ? cur.name + '／' : '') + room), from, text,
     name: s ? s.name : '全員', sid: s ? s.sid : '',
     ip: (extra && extra.ip) || '',
   });
