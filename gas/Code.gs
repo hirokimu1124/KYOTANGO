@@ -10,7 +10,7 @@
  */
 
 const SHEET_NAME = 'ログ';
-const HEADER = ['日時', 'クラスコード', '生徒名', '送信者', '内容', '生徒ID', 'メッセージID'];
+const HEADER = ['日時', 'クラスコード', '生徒名', '送信者', '内容', '生徒ID', 'メッセージID', 'IPアドレス'];
 
 function setup() {
   const props = PropertiesService.getScriptProperties();
@@ -48,6 +48,11 @@ function getSheet_() {
     sh.setColumnWidth(5, 420);
     sh.getRange('E:E').setWrap(true);
   }
+  // 以前の版で作ったシート（7列）には「IPアドレス」の見出しを足す
+  if (sh.getLastColumn() < HEADER.length) {
+    sh.getRange(1, 1, 1, HEADER.length).setValues([HEADER]).setFontWeight('bold').setBackground('#e8eefc');
+    sh.setColumnWidth(HEADER.length, 130);
+  }
   return sh;
 }
 
@@ -80,6 +85,7 @@ function doPost(e) {
           clean_(r.text, 2000),
           clean_(r.sid, 40),
           id,
+          clean_(r.ip, 64),
         ]);
       }
       if (out.length) sh.getRange(sh.getLastRow() + 1, 1, out.length, HEADER.length).setValues(out);

@@ -500,8 +500,10 @@ function onConnection(conn) {
       if (!/^[a-z0-9-]{4,40}$/.test(sid) || !name) { conn.close(); return; }
       s = getStudent(sid, name);
       if (!s) { setBanner(`接続人数の上限（${MAX_STUDENTS}人）に達したため、新しい接続を断りました。`); conn.close(); return; }
+      const rejoin = !!(s.conn && s.conn !== conn && s.visit);
       if (s.conn && s.conn !== conn) s.conn.close();
       s.conn = conn; s.connected = true; s.hand = !!d.hand; s.peerId = conn.peer;
+      if (!IS_CO) logJoin(s, conn, rejoin);
       byPeer.set(conn.peer, s);
       const pc = pendingCalls.get(conn.peer);
       if (pc) { pendingCalls.delete(conn.peer); attachCall(s, pc); }
@@ -514,9 +516,86 @@ function onConnection(conn) {
   conn.on('close', () => {
     if (co) { onCoClosed(co); return; }
     byPeer.delete(conn.peer);
-    if (s && s.conn === conn) { s.connected = false; s.sharing = false; refresh(s); }
+    if (s && s.conn === conn) {
+      s.connected = false; s.sharing = false; refresh(s);
+      if (!IS_CO) logLeave(s, '退室');
+    }
   });
 }
+
+// ---------- 入退室の記録（IPアドレスつき） ----------
+// 記録するのは主担当だけ（記録設定がある場合）。IPアドレスは、生徒との接続で実際に使われている
+// 経路（getStats の選択中の候補ペア）から取る。中継経由や同じネットワーク内で相手のアドレスが
+// 見えないときは、生徒側が知らせてきた接続候補（SDP の srflx＝インターネット側のアドレス）を使う。
+const isIpAddr = a => /^(\d{1,3}\.){3}\d{1,3}$/.test(a) || (/^[0-9a-f:]+$/i.test(a) && a.includes(':'));
+async function peerAddress(pc) {
+  const out = { ip: '', route: '' };
+  if (!pc) return out;
+  try {
+    const stats = await pc.getStats();
+    const byId = {};
+    let pairId = null;
+    stats.forEach(r => {
+      byId[r.id] = r;
+      if (r.type === 'transport' && r.selectedCandidatePairId) pairId = r.selectedCandidatePairId;
+    });
+    if (!pairId) stats.forEach(r => { if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') pairId = r.id; });
+    const pair = pairId && byId[pairId];
+    const local = pair && byId[pair.localCandidateId];
+    const remote = pair && byId[pair.remoteCandidateId];
+    if (local || remote) {
+      out.route = (local && local.candidateType === 'relay') || (remote && remote.candidateType === 'relay') ? '中継' : '直接';
+    }
+    const a = remote && String(remote.address || remote.ip || '');
+    if (remote && remote.candidateType !== 'relay' && isIpAddr(a)) out.ip = a;
+  } catch { /* 接続の切り替え中 */ }
+  if (!out.ip) {
+    const sdp = (pc.remoteDescription && pc.remoteDescription.sdp) || '';
+    const m = sdp.match(/a=candidate:\S+ \d+ \S+ \d+ (\S+) \d+ typ srflx/i);
+    if (m && isIpAddr(m[1])) out.ip = m[1];
+  }
+  return out;
+}
+
+const fmtDur = ms => {
+  const m = Math.round(ms / 60000);
+  return m < 60 ? `${m}分` : `${Math.floor(m / 60)}時間${m % 60}分`;
+};
+
+async function logJoin(s, conn, rejoin) {
+  const prevIp = s.visit ? s.visit.ip : '';
+  const since = rejoin ? s.visit.since : Date.now();
+  s.visit = { since, ip: prevIp, conn };
+  let info = { ip: '', route: '' };
+  // 接続の直後は統計がそろっていないことがあるので、少し待って何度か試す
+  for (let i = 0; i < 4 && !info.ip; i++) {
+    if (i) await new Promise(r => setTimeout(r, 1500));
+    if (s.conn !== conn) return;
+    info = await peerAddress(conn.peerConnection);
+  }
+  if (s.conn !== conn || !s.visit) return;
+  s.visit.ip = info.ip;
+  const ipText = info.ip || '不明';
+  const route = info.route ? `・${info.route}` : '';
+  let text;
+  if (rejoin) text = `再接続（IP ${ipText}${route}${prevIp && info.ip && prevIp !== info.ip ? `・前回 ${prevIp} から変更` : ''}）`;
+  else text = `入室（IP ${ipText}${route}）`;
+  logRow(s, '入退室', text, { ip: info.ip });
+}
+
+function logLeave(s, label) {
+  if (!s.visit) return;
+  const v = s.visit;
+  s.visit = null;
+  logRow(s, '入退室', `${label}（IP ${v.ip || '不明'}・滞在 ${fmtDur(Date.now() - v.since)}）`, { ip: v.ip });
+}
+
+// 先生のページを閉じると以後の退室は分からないため、その時点で接続中の生徒を区切りとして記録する
+// （記録は待ち行列に保存され、次にページを開いたときに送られる）
+window.addEventListener('pagehide', () => {
+  if (IS_CO) return;
+  for (const s of students.values()) if (s.visit) logLeave(s, '記録終了：先生のページを閉じた');
+});
 
 function onStudentData(s, d) {
   if (d.type === 'hand') {
@@ -1182,12 +1261,13 @@ let logQueue = [];
 try { logQueue = JSON.parse(store.get('screenmon-logq') || '[]'); } catch {}
 let logBusy = false, logError = '';
 
-function logRow(s, from, text) {
+function logRow(s, from, text, extra) {
   if (!logCfg.url) return;
   logQueue.push({
     id: (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random()),
     ts: Date.now(), room: (cur && cur.name ? cur.name + '／' : '') + room, from, text,
     name: s ? s.name : '全員', sid: s ? s.sid : '',
+    ip: (extra && extra.ip) || '',
   });
   if (logQueue.length > 5000) logQueue = logQueue.slice(-5000);
   store.set('screenmon-logq', JSON.stringify(logQueue));
