@@ -195,6 +195,8 @@
 </dialog>
 
 <script>
+// 公開している版。公開スクリプト（publish）が更新のたびに書き換える。開いているページは新しい版を見つけると切り替わる
+const APP_VERSION = '2026-11-04.2040';
 const PREFIX = 'hk-screenmon-v2-';
 const MAX_STUDENTS = 80;
 const $ = id => document.getElementById(id);
@@ -690,7 +692,8 @@ function endLogSession(label) {
 }
 // 先生のページを閉じると以後の退室は分からないため、その時点で接続中の人を区切りとして記録する
 // （記録は待ち行列に保存され、次にページを開いたときに送られる）
-window.addEventListener('pagehide', () => endLogSession('記録終了：先生のページを閉じた'));
+let unloadLabel = '記録終了：先生のページを閉じた';
+window.addEventListener('pagehide', () => endLogSession(unloadLabel));
 
 function onStudentData(s, d) {
   if (d.type === 'hand') {
@@ -1459,7 +1462,42 @@ function beep(freq = 880) {
   } catch {}
 }
 
-window.addEventListener('beforeunload', e => { if (students.size) { e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('beforeunload', e => { if (students.size && !updatingTo) { e.preventDefault(); e.returnValue = ''; } });
+
+// ---------- 新しい版の自動切り替え ----------
+// 5分ごとに公開中の teacher.html を確かめ、版が新しければ切り替える。
+// 生徒・副担当が誰もつながっていなければすぐに再読み込みし、授業中は案内を出して、全員が抜けたところで切り替える。
+let updatingTo = '', newVersion = '';
+async function checkNewVersion() {
+  if (!newVersion) {
+    try {
+      const r = await fetch(location.pathname + '?v=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) return;
+      const m = (await r.text()).match(/const APP_VERSION = '([^']+)'/);
+      if (!m || m[1] <= APP_VERSION) return;
+      newVersion = m[1];
+    } catch { return; }
+  }
+  let tried = false;
+  try { tried = sessionStorage.getItem('screenmon-update-tried') === newVersion; } catch {}
+  const busy = [...students.values()].some(s => s.connected) || (!IS_CO && coTeachers.size > 0);
+  if (!busy && !tried) {
+    try { sessionStorage.setItem('screenmon-update-tried', newVersion); } catch {}
+    updatingTo = newVersion;
+    unloadLabel = '記録終了：新しい版に切り替え';
+    const u = new URL(location.href);
+    u.searchParams.set('_v', newVersion);
+    location.replace(u.toString());
+    return;
+  }
+  setBanner(tried
+    ? `新しい版（${newVersion}）があります。Ctrl＋F5 で再読み込みしてください。`
+    : `新しい版（${newVersion}）があります。つながっている人がいなくなったら自動で切り替わります（今すぐなら F5）。`, 'info');
+}
+setTimeout(checkNewVersion, 30000);
+setInterval(checkNewVersion, 5 * 60000);
+// 新しい版を見つけたあとは、全員が抜けたらすぐ切り替えられるよう1分ごとに確かめる
+setInterval(() => { if (newVersion) checkNewVersion(); }, 60000);
 
 (async () => {
   if (!(window.crypto && crypto.subtle)) {
