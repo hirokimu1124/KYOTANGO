@@ -16,7 +16,7 @@
  *  - 自動更新：毎日1回、GitHub の最新の Code.gs / appsscript.json を取り込み、同じウェブアプリURLのまま新しい版にする
  */
 
-const SCRIPT_VERSION = '2026-11-04.2040';
+const SCRIPT_VERSION = '2026-11-25.0718';
 const SHEET_NAME = 'ログ';
 const SUMMARY_SHEET = '入退室まとめ';
 const HEADER = ['日時', 'クラスコード', '生徒名', '送信者', '内容', '生徒ID', 'メッセージID', 'IPアドレス'];
@@ -33,13 +33,24 @@ function setup() {
   setupAutomation();
   Logger.log('合言葉：' + token);
   // 自動更新の準備ができていれば、ここで最新版を取り込み、ウェブアプリも最新の版に切り替える
-  try { Logger.log('自動更新：' + runUpdate_().msg); } catch (e) { Logger.log('自動更新：' + e); }
+  if (autoUpdateOn_()) {
+    try { Logger.log('自動更新：' + runUpdate_().msg); } catch (e) { Logger.log('自動更新：' + e); }
+  }
   return token;
+}
+
+// 自動更新を使うか。メニューで切り替えた値があればそれ、なければ配布設定（別ファイルの AUTO_UPDATE_DEFAULT）、
+// どちらもなければ使う。配布用のコピーは配布設定で「使わない」にしてある（受け取った人の環境で提供者のコードを自動で動かさないため）
+function autoUpdateOn_() {
+  const v = PropertiesService.getScriptProperties().getProperty('AUTO_UPDATE');
+  if (v === 'on') return true;
+  if (v === 'off') return false;
+  return typeof AUTO_UPDATE_DEFAULT === 'undefined' ? true : !!AUTO_UPDATE_DEFAULT;
 }
 
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('画面モニター')
-    .addItem('合言葉を表示', 'showToken')
+    .addItem('はじめる／合言葉を表示', 'showToken')
     .addItem('入退室まとめを今すぐ作る', 'buildSummaryNow')
     .addSeparator()
     .addItem('最新版を確認して更新する', 'checkUpdateNow')
@@ -153,7 +164,7 @@ function showAutomationStatus() {
   const lines = [
     `この記録用コードの版：${SCRIPT_VERSION}`,
     `入退室まとめ：${triggers.includes('buildSummary') ? '1時間ごとに作成' : '未設定'}（最後：${p.getProperty('SUMMARY_AT') || 'まだ'}）`,
-    `自動更新：${triggers.includes('autoUpdate') ? (p.getProperty('AUTO_UPDATE') === 'off' ? '止めています' : '毎日確認') : '未設定'}`,
+    `自動更新：${triggers.includes('autoUpdate') ? (autoUpdateOn_() ? '毎日確認' : '止めています') : '未設定'}`,
     `最後の確認：${p.getProperty('UPDATE_AT') || 'まだ'}`,
     `結果：${p.getProperty('UPDATE_RESULT') || '—'}`,
   ];
@@ -163,9 +174,11 @@ function showAutomationStatus() {
 
 function toggleAutoUpdate() {
   const p = PropertiesService.getScriptProperties();
-  const off = p.getProperty('AUTO_UPDATE') === 'off';
+  const off = !autoUpdateOn_();
   p.setProperty('AUTO_UPDATE', off ? 'on' : 'off');
-  SpreadsheetApp.getUi().alert(off ? '自動更新を再開しました。' : '自動更新を止めました（手動の「最新版を確認して更新する」は使えます）。');
+  SpreadsheetApp.getUi().alert(off
+    ? '自動更新を始めました。\n動かすには、Apps Script API をオンにし、appsscript.json を GitHub の gas/appsscript.json（権限つき）に置き換えてください。'
+    : '自動更新を止めました（手動の「最新版を確認して更新する」は使えます）。');
 }
 
 // =====================================================================
@@ -302,7 +315,7 @@ function summarizeRows_(values, tz) {
 // =====================================================================
 
 function autoUpdate() {
-  if (PropertiesService.getScriptProperties().getProperty('AUTO_UPDATE') === 'off') return '自動更新は止めています';
+  if (!autoUpdateOn_()) return '自動更新は止めています';
   const r = runUpdate_();
   // 失敗が始まったときだけエラーにする（Google から「スクリプトのエラー」の通知メールが届く）
   if (r.failed && r.firstFailure) throw new Error(r.msg);
